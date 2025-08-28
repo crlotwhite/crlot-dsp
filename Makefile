@@ -3,10 +3,13 @@
 all: clean build run
 
 build:
-	bazel $(RC) build //main:main
+	bazel build //main:main
 
 clean:
 	bazel clean
 
 run:
-	bazel-bin/main/main$(EXEEXT)
+	bazel-bin/main/main
+
+test:
+	bazel test --test_output=all //tests:hello_test
