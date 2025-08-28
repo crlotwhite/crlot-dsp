@@ -3,5 +3,8 @@ load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 cc_binary(
     name = "main",
     srcs = ["main.cc"],
-    deps = ["@fmt//:fmt"],
+    deps = [
+        "@fmt//:fmt",
+        "//third_party:dr_libs"
+    ],
 )

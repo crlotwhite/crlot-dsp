@@ -1,0 +1,10 @@
+
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "dr_libs",
+    hdrs = glob(["dr_libs/**/*.h"]),
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
