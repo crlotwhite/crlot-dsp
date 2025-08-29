@@ -9,3 +9,17 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "wav_io_test",
+    size = "small",
+    srcs = ["wav_io_test.cc"],
+    data = [
+        "//assets:oboe_wav",
+    ],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//io:wav",
+    ],
+)

@@ -44,16 +44,17 @@ public:
     WavWriter();
     ~WavWriter();
 
-    // 파일 생성
+    // 파일 생성 (다양한 포맷 지원)
     bool open(const std::string& filename,
               uint32_t channels,
               uint32_t sample_rate,
-              uint32_t bits_per_sample = 16);
+              uint32_t bits_per_sample = 16,
+              bool float_format = false);
 
     // 파일 닫기
     void close();
 
-    // 오디오 데이터 쓰기
+    // 오디오 데이터 쓰기 (float32 입력)
     bool write(const float* buffer, size_t frames_to_write, size_t* frames_written = nullptr);
 
     // 파일이 열려있는지 확인
@@ -62,6 +63,12 @@ public:
 private:
     drwav* wav_;
     bool is_open_;
+    uint32_t bits_per_sample_;
+    bool is_float_;
+    
+    // 다양한 비트 심도에 따른 데이터 변환
+    template<typename T>
+    void convert_float_to_int(const float* input, T* output, size_t sample_count, float scale);
 };
 
 #endif // WAV_H
