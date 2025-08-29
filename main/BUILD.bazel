@@ -8,5 +8,6 @@ cc_binary(
         "//third_party:dr_libs",
         "//third_party:kissfft",
         "//io:wav",
+        "@spdlog//:spdlog",
     ],
 )

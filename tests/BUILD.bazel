@@ -21,5 +21,6 @@ cc_test(
         "@googletest//:gtest",
         "@googletest//:gtest_main",
         "//io:wav",
+        "@spdlog//:spdlog",
     ],
 )

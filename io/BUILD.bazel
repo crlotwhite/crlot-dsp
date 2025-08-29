@@ -8,5 +8,6 @@ cc_library(
     hdrs = ["wav.h"],
     deps = [
         "//third_party:dr_libs",
+        "@spdlog//:spdlog",
     ],
 )

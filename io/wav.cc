@@ -2,6 +2,7 @@
 #define DR_WAV_IMPLEMENTATION
 #include "wav.h"
 
+#include <spdlog/spdlog.h>
 #include <algorithm>
 #include <cstring>
 #include <cmath>
@@ -14,12 +15,15 @@ WavReader::~WavReader() {
 }
 
 bool WavReader::open(const std::string& filename) {
+    SPDLOG_DEBUG("WavReader::open() 진입: {}", filename);
     close();
 
     wav_ = new drwav();
     if (!drwav_init_file(wav_, filename.c_str(), nullptr)) {
+        SPDLOG_ERROR("WavReader: 파일 초기화 실패: {}", filename);
         delete wav_;
         wav_ = nullptr;
+        SPDLOG_DEBUG("WavReader::open() 종료: 실패");
         return false;
     }
 
@@ -30,8 +34,7 @@ bool WavReader::open(const std::string& filename) {
     const bool bps_ok = (wav_->bitsPerSample == 16 || wav_->bitsPerSample == 24 || wav_->bitsPerSample == 32);
 
     if (!channels_ok) {
-        std::cerr << "WavReader: Unsupported channel count: " << wav_->channels
-                  << " (only mono=1 or stereo=2 supported)" << std::endl;
+        SPDLOG_ERROR("WavReader: 지원되지 않는 채널 수: {} (모노=1 또는 스테레오=2만 지원)", wav_->channels);
         drwav_uninit(wav_);
         delete wav_;
         wav_ = nullptr;
@@ -39,8 +42,7 @@ bool WavReader::open(const std::string& filename) {
     }
 
     if (!bps_ok) {
-        std::cerr << "WavReader: Unsupported bits per sample: " << wav_->bitsPerSample
-                  << " (only 16, 24, 32 supported)" << std::endl;
+        SPDLOG_ERROR("WavReader: 지원되지 않는 비트 심도: {} (16, 24, 32만 지원)", wav_->bitsPerSample);
         drwav_uninit(wav_);
         delete wav_;
         wav_ = nullptr;
@@ -48,8 +50,7 @@ bool WavReader::open(const std::string& filename) {
     }
 
     if (!(is_pcm || is_f32)) {
-        std::cerr << "WavReader: Unsupported format tag: " << wav_->translatedFormatTag
-                  << " (only PCM or IEEE_FLOAT supported)" << std::endl;
+        SPDLOG_ERROR("WavReader: 지원되지 않는 포맷 태그: {} (PCM 또는 IEEE_FLOAT만 지원)", wav_->translatedFormatTag);
         drwav_uninit(wav_);
         delete wav_;
         wav_ = nullptr;
@@ -57,16 +58,19 @@ bool WavReader::open(const std::string& filename) {
     }
 
     is_open_ = true;
+    SPDLOG_DEBUG("WavReader::open() 종료: 성공");
     return true;
 }
 
 void WavReader::close() {
+    SPDLOG_DEBUG("WavReader::close() 진입");
     if (is_open_ && wav_) {
         drwav_uninit(wav_);
         delete wav_;
         wav_ = nullptr;
         is_open_ = false;
     }
+    SPDLOG_DEBUG("WavReader::close() 종료");
 }
 
 bool WavReader::read(float* buffer, size_t frames_to_read, size_t* frames_read) {
@@ -84,7 +88,10 @@ bool WavReader::read(float* buffer, size_t frames_to_read, size_t* frames_read) 
 }
 
 std::vector<float> WavReader::read_all() {
+    SPDLOG_DEBUG("WavReader::read_all() 진입");
     if (!is_open_ || !wav_) {
+        SPDLOG_ERROR("WavReader::read_all() 실패: 파일이 열려있지 않음");
+        SPDLOG_DEBUG("WavReader::read_all() 종료: 실패");
         return {};
     }
 
@@ -92,7 +99,10 @@ std::vector<float> WavReader::read_all() {
     uint32_t channels = get_channels();
     size_t total_samples = static_cast<size_t>(total_frames * channels);
 
+    SPDLOG_DEBUG("WavReader::read_all() - 총 프레임: {}, 채널: {}, 총 샘플: {}", total_frames, channels, total_samples);
+
     if (total_samples == 0) {
+        SPDLOG_DEBUG("WavReader::read_all() 종료: 빈 데이터");
         return {};
     }
 
@@ -105,8 +115,10 @@ std::vector<float> WavReader::read_all() {
     if (frames_read < total_frames) {
         // 읽은 프레임 수만큼 데이터 크기 조정
         data.resize(frames_read * channels);
+        SPDLOG_WARN("WavReader::read_all() - 일부 데이터만 읽음: {} / {} 프레임", frames_read, total_frames);
     }
 
+    SPDLOG_DEBUG("WavReader::read_all() 종료: 성공, 읽은 샘플 수: {}", data.size());
     return data;
 }
 
@@ -137,23 +149,23 @@ WavWriter::~WavWriter() {
 }
 
 bool WavWriter::open(const std::string& filename,
-                     uint32_t channels,
-                     uint32_t sample_rate,
-                     uint32_t bits_per_sample,
-                     bool float_format) {
+                      uint32_t channels,
+                      uint32_t sample_rate,
+                      uint32_t bits_per_sample,
+                      bool float_format) {
+    SPDLOG_DEBUG("WavWriter::open() 진입: {}, 채널={}, 샘플레이트={}, 비트심도={}, float={}",
+                 filename, channels, sample_rate, bits_per_sample, float_format);
     close();
 
     // 채널 가드
     if (channels == 0 || (channels != 1 && channels != 2)) {
-        std::cerr << "WavWriter: Unsupported channel count: " << channels
-                  << " (only mono=1 or stereo=2 supported)" << std::endl;
+        SPDLOG_ERROR("WavWriter: 지원되지 않는 채널 수: {} (모노=1 또는 스테레오=2만 지원)", channels);
         return false;
     }
 
     // 지원되는 비트 심도 확인
     if (bits_per_sample != 16 && bits_per_sample != 24 && bits_per_sample != 32) {
-        std::cerr << "WavWriter: Unsupported bits per sample: " << bits_per_sample
-                  << " (only 16, 24, 32 supported)" << std::endl;
+        SPDLOG_ERROR("WavWriter: 지원되지 않는 비트 심도: {} (16, 24, 32만 지원)", bits_per_sample);
         return false;
     }
 
@@ -170,25 +182,33 @@ bool WavWriter::open(const std::string& filename,
         is_open_ = true;
         bits_per_sample_ = bits_per_sample;
         is_float_ = (format.format == DR_WAVE_FORMAT_IEEE_FLOAT);
+        SPDLOG_DEBUG("WavWriter::open() 종료: 성공");
         return true;
     } else {
+        SPDLOG_ERROR("WavWriter: 파일 쓰기 초기화 실패: {}", filename);
         delete wav_;
         wav_ = nullptr;
+        SPDLOG_DEBUG("WavWriter::open() 종료: 실패");
         return false;
     }
 }
 
 void WavWriter::close() {
+    SPDLOG_DEBUG("WavWriter::close() 진입");
     if (is_open_ && wav_) {
         drwav_uninit(wav_);
         delete wav_;
         wav_ = nullptr;
         is_open_ = false;
     }
+    SPDLOG_DEBUG("WavWriter::close() 종료");
 }
 
 bool WavWriter::write(const float* buffer, size_t frames_to_write, size_t* frames_written) {
+    SPDLOG_DEBUG("WavWriter::write() 진입: 프레임 수={}", frames_to_write);
     if (!is_open_ || !wav_) {
+        SPDLOG_ERROR("WavWriter::write() 실패: 파일이 열려있지 않음");
+        SPDLOG_DEBUG("WavWriter::write() 종료: 실패");
         return false;
     }
 
@@ -242,7 +262,10 @@ bool WavWriter::write(const float* buffer, size_t frames_to_write, size_t* frame
         *frames_written = static_cast<size_t>(frames_written_actual);
     }
 
-    return frames_written_actual == frames_to_write;
+    bool success = frames_written_actual == frames_to_write;
+    SPDLOG_DEBUG("WavWriter::write() 종료: {} (요청={}, 실제={})",
+                 success ? "성공" : "실패", frames_to_write, frames_written_actual);
+    return success;
 }
 
 bool WavWriter::is_open() const {
