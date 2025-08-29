@@ -7,5 +7,6 @@ cc_binary(
         "@fmt//:fmt",
         "//third_party:dr_libs",
         "//third_party:kissfft",
+        "//io:wav",
     ],
 )

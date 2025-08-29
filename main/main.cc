@@ -5,8 +5,7 @@
 #include <algorithm>
 #include <cstdlib>
 
-#define DR_WAV_IMPLEMENTATION
-#include <dr_wav.h>
+#include "io/wav.h"
 #include <kissfft/kiss_fft.h>
 
 int main() {
@@ -16,43 +15,44 @@ int main() {
   fmt::print("Date and time: {}\n", now);
   fmt::print("Time: {:%H:%M}\n", now);
 
-  drwav wav;
-  if (!drwav_init_file(&wav, "assets/oboe.wav", nullptr)) {
-    fmt::print("Failed to open WAV file.\n");
+  // WavReader를 사용해서 WAV 파일 읽기
+  WavReader reader;
+  if (!reader.open("assets/oboe.wav")) {
+    fmt::print("Failed to open WAV file with WavReader.\n");
     return -1;
   } else {
-    fmt::print("WAV file opened successfully.\n");
+    fmt::print("WAV file opened successfully with WavReader.\n");
   }
 
-  // Read all frames as 32-bit floats
-  drwav_uint64 totalFrames = wav.totalPCMFrameCount;
-  if (totalFrames == 0) {
-    fmt::print("No audio frames in WAV.\n");
-    drwav_uninit(&wav);
+  // 오디오 정보 출력
+  fmt::print("Channels: {}\n", reader.get_channels());
+  fmt::print("Sample Rate: {} Hz\n", reader.get_sample_rate());
+  fmt::print("Total Frames: {}\n", reader.get_total_frames());
+  fmt::print("Bits per Sample: {}\n", reader.get_bits_per_sample());
+
+  // 전체 오디오 데이터 읽기
+  std::vector<float> pcm = reader.read_all();
+  if (pcm.empty()) {
+    fmt::print("Failed to read PCM data.\n");
+    reader.close();
     return -1;
   }
-  size_t channels = wav.channels;
-  size_t framesToRead = static_cast<size_t>(totalFrames);
 
-  std::vector<float> pcm(framesToRead * channels);
-  drwav_uint64 framesRead = drwav_read_pcm_frames_f32(&wav, framesToRead, pcm.data());
-  if (framesRead == 0) {
-    fmt::print("Failed to read PCM frames.\n");
-    drwav_uninit(&wav);
-    return -1;
-  }
-  size_t framesReadS = static_cast<size_t>(framesRead);
+  size_t totalFrames = reader.get_total_frames();
+  size_t channels = reader.get_channels();
+  unsigned int sampleRate = reader.get_sample_rate();
 
-  // Choose FFT size: 4096 or the largest power-of-two <= framesRead
+  reader.close();
+
+  // Choose FFT size: 4096 or the largest power-of-two <= totalFrames
   size_t N = 4096;
-  if (framesReadS < N) {
+  if (totalFrames < N) {
     size_t p = 1;
-    while (p * 2 <= framesReadS) p *= 2;
+    while (p * 2 <= totalFrames) p *= 2;
     N = std::max<size_t>(1, p);
   }
   if (N < 2) {
     fmt::print("Not enough samples for FFT.\n");
-    drwav_uninit(&wav);
     return -1;
   }
   fmt::print("FFT size: {}\n", N);
@@ -63,7 +63,6 @@ int main() {
   if (!in || !out) {
     fmt::print("Allocation failed.\n");
     std::free(in); std::free(out);
-    drwav_uninit(&wav);
     return -1;
   }
   const float PI = 3.14159265358979323846f;
@@ -86,7 +85,6 @@ int main() {
   if (!cfg) {
     fmt::print("kiss_fft_alloc failed.\n");
     std::free(in); std::free(out);
-    drwav_uninit(&wav);
     return -1;
   }
   kiss_fft(cfg, in, out);
@@ -102,7 +100,6 @@ int main() {
   std::sort(mags.begin(), mags.end(), [](auto &a, auto &b){ return a.first > b.first; });
 
   // Print top 10 peaks with frequency in Hz
-  unsigned int sampleRate = wav.sampleRate;
   size_t topN = std::min<size_t>(10, mags.size());
   fmt::print("Top {} frequency bins:\n", topN);
   for (size_t i = 0; i < topN; ++i) {
@@ -116,8 +113,30 @@ int main() {
   std::free(in);
   std::free(out);
   std::free(cfg); // kiss_fft_alloc uses malloc internally
-  drwav_uninit(&wav);
 
+  // WavWriter를 사용해서 간단한 톤 생성 및 저장 테스트
+  WavWriter writer;
+  if (writer.open("test_output.wav", 1, 44100, 16)) {
+    fmt::print("WavWriter opened successfully.\n");
+
+    // 간단한 사인파 생성 (440Hz, 1초)
+    const size_t tone_frames = 44100;
+    std::vector<float> tone_data(tone_frames);
+    for (size_t i = 0; i < tone_frames; ++i) {
+      tone_data[i] = 0.5f * std::sin(2.0f * PI * 440.0f * static_cast<float>(i) / 44100.0f);
+    }
+
+    size_t frames_written;
+    if (writer.write(tone_data.data(), tone_frames, &frames_written)) {
+      fmt::print("Wrote {} frames to test_output.wav\n", frames_written);
+    } else {
+      fmt::print("Failed to write to WAV file.\n");
+    }
+
+    writer.close();
+  } else {
+    fmt::print("Failed to open WavWriter.\n");
+  }
 
   return 0;
 }

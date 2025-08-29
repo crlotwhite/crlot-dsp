@@ -1,4 +1,4 @@
-
+package(default_visibility = ["//visibility:public"])
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
@@ -7,7 +7,6 @@ cc_library(
     name = "dr_libs",
     hdrs = glob(["dr_libs/**/*.h"]),
     includes = ["dr_libs"],
-    visibility = ["//visibility:public"],
 )
 
 cmake(
@@ -27,5 +26,4 @@ cmake(
     }),
     # kissfft CMake가 보통 include/<...>로 설치하므로 include 루트를 노출
     includes = ["include"],  # 필요시 ["include/kissfft"]로 세분화
-    visibility = ["//visibility:public"],
 )

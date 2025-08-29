@@ -1,0 +1,12 @@
+package(default_visibility = ["//visibility:public"])
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "wav",
+    srcs = ["wav.cc"],
+    hdrs = ["wav.h"],
+    deps = [
+        "//third_party:dr_libs",
+    ],
+)
