@@ -2,8 +2,26 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
 cc_library(
     name = "frame_queue",
-    srcs = ["frame/FrameQueue.cpp"],
+    srcs = ["frame/FrameQueue.cc"],
     hdrs = ["frame/FrameQueue.h"],
     visibility = ["//visibility:public"],
     deps = [],
+)
+
+cc_library(
+    name = "window_lut",
+    srcs = ["window/WindowLUT.cc"],
+    hdrs = ["window/WindowLUT.h"],
+    visibility = ["//visibility:public"],
+    deps = [],
+    copts = ["-std=c++17"],
+)
+
+cc_library(
+    name = "framer",
+    srcs = ["framer.cc"],
+    hdrs = ["framer.h"],
+    visibility = ["//visibility:public"],
+    deps = [],
+    copts = ["-std=c++17"],
 )

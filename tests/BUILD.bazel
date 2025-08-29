@@ -35,3 +35,39 @@ cc_test(
         "//dsp:frame_queue",
     ],
 )
+
+cc_test(
+    name = "window_lut_test",
+    size = "small",
+    srcs = ["window_lut_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:window_lut",
+    ],
+    copts = ["-std=c++17"],
+)
+
+cc_test(
+    name = "window_test",
+    size = "small",
+    srcs = ["window_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:window_lut",
+    ],
+    copts = ["-std=c++17"],
+)
+
+cc_test(
+    name = "framer_test",
+    size = "small",
+    srcs = ["framer_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:framer",
+    ],
+    copts = ["-std=c++17"],
+)
