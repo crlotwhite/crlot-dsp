@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <iostream>
 
 WavReader::WavReader() : wav_(nullptr), is_open_(false) {}
 
@@ -28,7 +29,27 @@ bool WavReader::open(const std::string& filename) {
     const bool is_f32 = (wav_->translatedFormatTag == DR_WAVE_FORMAT_IEEE_FLOAT && wav_->bitsPerSample == 32);
     const bool bps_ok = (wav_->bitsPerSample == 16 || wav_->bitsPerSample == 24 || wav_->bitsPerSample == 32);
 
-    if (!channels_ok || !bps_ok || !(is_pcm || is_f32)) {
+    if (!channels_ok) {
+        std::cerr << "WavReader: Unsupported channel count: " << wav_->channels
+                  << " (only mono=1 or stereo=2 supported)" << std::endl;
+        drwav_uninit(wav_);
+        delete wav_;
+        wav_ = nullptr;
+        return false;
+    }
+
+    if (!bps_ok) {
+        std::cerr << "WavReader: Unsupported bits per sample: " << wav_->bitsPerSample
+                  << " (only 16, 24, 32 supported)" << std::endl;
+        drwav_uninit(wav_);
+        delete wav_;
+        wav_ = nullptr;
+        return false;
+    }
+
+    if (!(is_pcm || is_f32)) {
+        std::cerr << "WavReader: Unsupported format tag: " << wav_->translatedFormatTag
+                  << " (only PCM or IEEE_FLOAT supported)" << std::endl;
         drwav_uninit(wav_);
         delete wav_;
         wav_ = nullptr;
@@ -124,11 +145,15 @@ bool WavWriter::open(const std::string& filename,
 
     // 채널 가드
     if (channels == 0 || (channels != 1 && channels != 2)) {
+        std::cerr << "WavWriter: Unsupported channel count: " << channels
+                  << " (only mono=1 or stereo=2 supported)" << std::endl;
         return false;
     }
 
     // 지원되는 비트 심도 확인
     if (bits_per_sample != 16 && bits_per_sample != 24 && bits_per_sample != 32) {
+        std::cerr << "WavWriter: Unsupported bits per sample: " << bits_per_sample
+                  << " (only 16, 24, 32 supported)" << std::endl;
         return false;
     }
 

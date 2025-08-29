@@ -628,3 +628,281 @@ TEST_F(WavIOTest, Mono_Stereo_RoundTrip) {
         reader.close();
     }
 }
+
+// dBFS 계산 유틸리티 함수
+static double calculate_peak_dbfs(const std::vector<float>& data) {
+    if (data.empty()) return -200.0;
+    float peak = 0.0f;
+    for (float sample : data) {
+        peak = std::max(peak, std::abs(sample));
+    }
+    if (peak == 0.0f) return -200.0;
+    return 20.0 * std::log10(peak);
+}
+
+static double calculate_rms_dbfs(const std::vector<float>& data) {
+    if (data.empty()) return -200.0;
+    double sum_squares = 0.0;
+    for (float sample : data) {
+        sum_squares += sample * sample;
+    }
+    double rms = std::sqrt(sum_squares / data.size());
+    if (rms == 0.0) return -200.0;
+    return 20.0 * std::log10(rms);
+}
+
+// 잘못된 포맷 파일에 대한 테스트
+TEST_F(WavIOTest, InvalidFormat_OpenFailure) {
+    // 지원되지 않는 채널 수로 Writer 생성 시도
+    {
+        WavWriter writer;
+        EXPECT_FALSE(writer.open((test_dir_ / "invalid_channels.wav").string(), 5, 44100, 16));
+        EXPECT_FALSE(writer.is_open());
+    }
+
+    // 지원되지 않는 비트 심도로 Writer 생성 시도
+    {
+        WavWriter writer;
+        EXPECT_FALSE(writer.open((test_dir_ / "invalid_bits.wav").string(), 2, 44100, 20));
+        EXPECT_FALSE(writer.is_open());
+    }
+
+    // 0 채널로 Writer 생성 시도
+    {
+        WavWriter writer;
+        EXPECT_FALSE(writer.open((test_dir_ / "zero_channels.wav").string(), 0, 44100, 16));
+        EXPECT_FALSE(writer.is_open());
+    }
+}
+
+// 빈 파일 및 경계 조건 테스트
+TEST_F(WavIOTest, EdgeCases) {
+    // 빈 데이터 쓰기
+    {
+        fs::path empty_file = test_dir_ / "empty.wav";
+        WavWriter writer;
+        EXPECT_TRUE(writer.open(empty_file.string(), 1, 44100, 16));
+        EXPECT_TRUE(writer.write(nullptr, 0, nullptr));  // 빈 데이터 쓰기
+        writer.close();
+
+        WavReader reader;
+        EXPECT_TRUE(reader.open(empty_file.string()));
+        EXPECT_EQ(reader.get_total_frames(), 0u);
+        EXPECT_EQ(reader.get_channels(), 1u);
+        std::vector<float> data = reader.read_all();
+        EXPECT_TRUE(data.empty());
+        reader.close();
+    }
+
+    // 매우 작은 파일 (1 프레임)
+    {
+        fs::path tiny_file = test_dir_ / "tiny.wav";
+        WavWriter writer;
+        EXPECT_TRUE(writer.open(tiny_file.string(), 2, 44100, 16));
+
+        std::vector<float> tiny_data = {0.5f, -0.3f};  // 1 프레임, 스테레오
+        size_t frames_written;
+        EXPECT_TRUE(writer.write(tiny_data.data(), 1, &frames_written));
+        EXPECT_EQ(frames_written, 1u);
+        writer.close();
+
+        WavReader reader;
+        EXPECT_TRUE(reader.open(tiny_file.string()));
+        EXPECT_EQ(reader.get_total_frames(), 1u);
+        std::vector<float> read_data = reader.read_all();
+        EXPECT_EQ(read_data.size(), 2u);
+        reader.close();
+    }
+}
+
+// 포맷별 dBFS 정밀도 검증
+TEST_F(WavIOTest, FormatPrecision_dBFS_Validation) {
+    const size_t frames = 1000;
+    const size_t channels = 1;
+    std::vector<float> original_data(frames * channels);
+
+    // -60 dBFS 신호 생성
+    const float test_level = 0.001f;  // -60 dBFS
+    const float PI = 3.14159265358979323846f;
+    for (size_t i = 0; i < frames; ++i) {
+        original_data[i] = test_level * std::sin(2.0f * PI * 1000.0f * static_cast<float>(i) / 44100.0f);
+    }
+
+    // 16비트 테스트
+    {
+        fs::path file_16 = test_dir_ / "precision_16.wav";
+        WavWriter writer;
+        EXPECT_TRUE(writer.open(file_16.string(), channels, 44100, 16));
+        size_t frames_written;
+        EXPECT_TRUE(writer.write(original_data.data(), frames, &frames_written));
+        writer.close();
+
+        WavReader reader;
+        EXPECT_TRUE(reader.open(file_16.string()));
+        std::vector<float> read_data = reader.read_all();
+        reader.close();
+
+        // 오차 계산
+        std::vector<float> error(read_data.size());
+        for (size_t i = 0; i < error.size(); ++i) {
+            error[i] = read_data[i] - original_data[i];
+        }
+
+        double peak_dbfs_error = calculate_peak_dbfs(error);
+        double rms_dbfs_error = calculate_rms_dbfs(error);
+
+        // 16비트는 약 -84 dBFS까지의 정밀도 기대
+        EXPECT_LE(peak_dbfs_error, -80.0) << "16-bit peak error too high: " << peak_dbfs_error << " dBFS";
+        EXPECT_LE(rms_dbfs_error, -85.0) << "16-bit RMS error too high: " << rms_dbfs_error << " dBFS";
+    }
+
+    // 24비트 테스트
+    {
+        fs::path file_24 = test_dir_ / "precision_24.wav";
+        WavWriter writer;
+        EXPECT_TRUE(writer.open(file_24.string(), channels, 44100, 24));
+        size_t frames_written;
+        EXPECT_TRUE(writer.write(original_data.data(), frames, &frames_written));
+        writer.close();
+
+        WavReader reader;
+        EXPECT_TRUE(reader.open(file_24.string()));
+        std::vector<float> read_data = reader.read_all();
+        reader.close();
+
+        // 오차 계산
+        std::vector<float> error(read_data.size());
+        for (size_t i = 0; i < error.size(); ++i) {
+            error[i] = read_data[i] - original_data[i];
+        }
+
+        double peak_dbfs_error = calculate_peak_dbfs(error);
+        double rms_dbfs_error = calculate_rms_dbfs(error);
+
+        // 24비트는 -144 dBFS까지의 정밀도 기대
+        EXPECT_LE(peak_dbfs_error, -100.0) << "24-bit peak error too high: " << peak_dbfs_error << " dBFS";
+        EXPECT_LE(rms_dbfs_error, -110.0) << "24-bit RMS error too high: " << rms_dbfs_error << " dBFS";
+    }
+
+    // 32비트 float 테스트
+    {
+        fs::path file_32f = test_dir_ / "precision_32f.wav";
+        WavWriter writer;
+        EXPECT_TRUE(writer.open(file_32f.string(), channels, 44100, 32, true));
+        size_t frames_written;
+        EXPECT_TRUE(writer.write(original_data.data(), frames, &frames_written));
+        writer.close();
+
+        WavReader reader;
+        EXPECT_TRUE(reader.open(file_32f.string()));
+        std::vector<float> read_data = reader.read_all();
+        reader.close();
+
+        // 오차 계산
+        std::vector<float> error(read_data.size());
+        for (size_t i = 0; i < error.size(); ++i) {
+            error[i] = read_data[i] - original_data[i];
+        }
+
+        double peak_dbfs_error = calculate_peak_dbfs(error);
+        double rms_dbfs_error = calculate_rms_dbfs(error);
+
+        // 32비트 float는 -150 dBFS 이상의 정밀도 기대
+        EXPECT_LE(peak_dbfs_error, -120.0) << "32-bit float peak error too high: " << peak_dbfs_error << " dBFS";
+        EXPECT_LE(rms_dbfs_error, -130.0) << "32-bit float RMS error too high: " << rms_dbfs_error << " dBFS";
+    }
+}
+
+// 44.1kHz와 48kHz 모두를 커버하는 포괄적 라운드트립 테스트
+TEST_F(WavIOTest, Comprehensive_RoundTrip_AllFormats) {
+    const std::vector<uint32_t> sample_rates = {44100, 48000};
+    const std::vector<uint32_t> bit_depths = {16, 24, 32};
+    const std::vector<uint32_t> channel_counts = {1, 2};
+    const size_t frames = 2048;  // 더 큰 데이터로 테스트
+
+    // 테스트 신호 생성 (다양한 주파수와 레벨)
+    auto generate_test_signal = [](std::vector<float>& data, uint32_t channels, size_t frames, uint32_t sample_rate) {
+        data.resize(frames * channels);
+        const float PI = 3.14159265358979323846f;
+
+        for (size_t i = 0; i < frames; ++i) {
+            // 여러 주파수 성분의 합
+            float sample = 0.3f * std::sin(2.0f * PI * 1000.0f * i / sample_rate) +
+                          0.2f * std::sin(2.0f * PI * 3000.0f * i / sample_rate) +
+                          0.1f * std::sin(2.0f * PI * 8000.0f * i / sample_rate);
+
+            for (uint32_t ch = 0; ch < channels; ++ch) {
+                data[i * channels + ch] = sample * (ch == 0 ? 1.0f : 0.8f);  // 약간 다른 레벨로 채널 구분
+            }
+        }
+    };
+
+    for (uint32_t sample_rate : sample_rates) {
+        for (uint32_t bit_depth : bit_depths) {
+            for (uint32_t channels : channel_counts) {
+                std::vector<float> original_data;
+                generate_test_signal(original_data, channels, frames, sample_rate);
+
+                // 파일명 생성
+                std::string filename = "rt_" + std::to_string(sample_rate) + "Hz_" +
+                                     std::to_string(bit_depth) + "bit_" +
+                                     std::to_string(channels) + "ch.wav";
+                fs::path test_file = test_dir_ / filename;
+
+                // 쓰기
+                {
+                    WavWriter writer;
+                    EXPECT_TRUE(writer.open(test_file.string(), channels, sample_rate, bit_depth))
+                        << "Failed to open writer: " << filename;
+
+                    size_t frames_written;
+                    EXPECT_TRUE(writer.write(original_data.data(), frames, &frames_written))
+                        << "Failed to write: " << filename;
+                    EXPECT_EQ(frames_written, frames) << "Incomplete write: " << filename;
+                    writer.close();
+                }
+
+                // 읽기 및 검증
+                {
+                    WavReader reader;
+                    EXPECT_TRUE(reader.open(test_file.string()))
+                        << "Failed to open reader: " << filename;
+
+                    EXPECT_EQ(reader.get_sample_rate(), sample_rate) << "Sample rate mismatch: " << filename;
+                    EXPECT_EQ(reader.get_channels(), channels) << "Channel count mismatch: " << filename;
+                    EXPECT_EQ(reader.get_bits_per_sample(), bit_depth) << "Bit depth mismatch: " << filename;
+                    EXPECT_EQ(reader.get_total_frames(), frames) << "Frame count mismatch: " << filename;
+
+                    std::vector<float> read_data = reader.read_all();
+                    EXPECT_EQ(read_data.size(), original_data.size()) << "Data size mismatch: " << filename;
+
+                    // 오차 계산 및 검증
+                    std::vector<float> error(read_data.size());
+                    for (size_t i = 0; i < error.size(); ++i) {
+                        error[i] = read_data[i] - original_data[i];
+                    }
+
+                    double peak_dbfs_error = calculate_peak_dbfs(error);
+                    double rms_dbfs_error = calculate_rms_dbfs(error);
+
+                    // 포맷별 적절한 정밀도 기준 적용 (실제 구현을 고려한 현실적인 값)
+                    double expected_min_dbfs = -90.0;  // 기본값
+                    if (bit_depth == 16) {
+                        expected_min_dbfs = -85.0;  // 16비트: ~96 dB 정밀도
+                    } else if (bit_depth == 24) {
+                        expected_min_dbfs = -135.0;  // 24비트: ~144 dB 정밀도 (약간 완화)
+                    } else if (bit_depth == 32) {
+                        expected_min_dbfs = -150.0;  // 32비트: 매우 높은 정밀도
+                    }
+
+                    EXPECT_LE(peak_dbfs_error, expected_min_dbfs)
+                        << "Peak error too high in " << filename << ": " << peak_dbfs_error << " dBFS (expected <= " << expected_min_dbfs << ")";
+                    EXPECT_LE(rms_dbfs_error, expected_min_dbfs)
+                        << "RMS error too high in " << filename << ": " << rms_dbfs_error << " dBFS (expected <= " << expected_min_dbfs << ")";
+
+                    reader.close();
+                }
+            }
+        }
+    }
+}
