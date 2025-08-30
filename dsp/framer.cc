@@ -162,10 +162,13 @@ bool Framer::extract_frame(float* out_frame) {
 
     // 읽기 위치 업데이트
     read_pos_ += hop_size_ * channels_;
+    if (read_pos_ > write_pos_) {
+        read_pos_ = write_pos_;
+    }
 
     // 버퍼 정리 (읽은 데이터가 버퍼의 절반 이상일 때)
     if (read_pos_ > buffer_.size() / 2) {
-        size_t remaining_samples = write_pos_ - read_pos_;
+        size_t remaining_samples = (read_pos_ < write_pos_) ? (write_pos_ - read_pos_) : 0;
         if (remaining_samples > 0) {
             std::copy(buffer_.begin() + read_pos_,
                       buffer_.begin() + write_pos_,
