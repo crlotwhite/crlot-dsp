@@ -8,7 +8,15 @@
 #include <cstdlib>
 
 #include "io/wav.h"
-#include "kiss_fft.h"
+#include "dsp/fft/api/fft_api.h"
+
+// Bazel 환경에서 파일 경로를 올바르게 처리하는 헬퍼 함수
+static std::string RunfilePath(const std::string& relative) {
+    const char* srcdir = std::getenv("TEST_SRCDIR");
+    const char* workspace = std::getenv("TEST_WORKSPACE");
+    if (!srcdir || !workspace) return relative; // fallback for non-bazel
+    return std::string(srcdir) + "/" + workspace + "/" + relative;
+}
 
 int main() {
   // spdlog 로거 설정
@@ -25,10 +33,11 @@ int main() {
   SPDLOG_INFO("Time: {:%H:%M}", now);
 
   // WavReader를 사용해서 WAV 파일 읽기
-  SPDLOG_INFO("WAV 파일 읽기 시작: assets/oboe.wav");
+  std::string wav_path = RunfilePath("assets/oboe.wav");
+  SPDLOG_INFO("WAV 파일 읽기 시작: {}", wav_path);
   WavReader reader;
-  if (!reader.open("assets/oboe.wav")) {
-    SPDLOG_ERROR("WAV 파일 열기 실패: assets/oboe.wav");
+  if (!reader.open(wav_path)) {
+    SPDLOG_ERROR("WAV 파일 열기 실패: {}", wav_path);
     return -1;
   } else {
     SPDLOG_INFO("WAV 파일 열기 성공");
@@ -69,16 +78,9 @@ int main() {
   }
   SPDLOG_INFO("FFT 크기: {}", N);
 
-  // Prepare real->complex input with a Hann window (mix down to mono)
-  SPDLOG_INFO("FFT를 위한 메모리 할당 시작");
-  kiss_fft_cpx* in = (kiss_fft_cpx*)std::malloc(sizeof(kiss_fft_cpx) * N);
-  kiss_fft_cpx* out = (kiss_fft_cpx*)std::malloc(sizeof(kiss_fft_cpx) * N);
-  if (!in || !out) {
-    SPDLOG_ERROR("메모리 할당 실패");
-    std::free(in); std::free(out);
-    return -1;
-  }
-  SPDLOG_INFO("메모리 할당 완료");
+  // Prepare real input with a Hann window (mix down to mono)
+  SPDLOG_INFO("FFT를 위한 입력 데이터 준비 시작");
+  std::vector<float> fft_input(N);
   const float PI = 3.14159265358979323846f;
   for (size_t i = 0; i < N; ++i) {
     // mix to mono by averaging channels (if stereo)
@@ -90,20 +92,30 @@ int main() {
 
     // Hann window
     float w = 0.5f * (1.0f - std::cos(2.0f * PI * static_cast<float>(i) / static_cast<float>(N - 1)));
-    in[i].r = sample * w;
-    in[i].i = 0.0f;
+    fft_input[i] = sample * w;
   }
+  SPDLOG_INFO("FFT 입력 데이터 준비 완료");
 
-  // FFT
+  // FFT 설정 및 실행
   SPDLOG_INFO("FFT 설정 및 실행 시작");
-  kiss_fft_cfg cfg = kiss_fft_alloc(static_cast<int>(N), 0, nullptr, nullptr);
-  if (!cfg) {
-    SPDLOG_ERROR("kiss_fft_alloc 실패");
-    std::free(in); std::free(out);
+  dsp::fft::FftPlanDesc desc{
+    dsp::fft::FftDomain::Real,
+    static_cast<int>(N),
+    false,  // in_place
+    1,      // batch
+    1,      // stride_in
+    1       // stride_out
+  };
+
+  auto fft_plan = dsp::fft::MakeFftPlan(desc);
+  if (!fft_plan) {
+    SPDLOG_ERROR("FFT 플랜 생성 실패");
     return -1;
   }
-  SPDLOG_INFO("FFT 설정 완료, FFT 실행 중...");
-  kiss_fft(cfg, in, out);
+  SPDLOG_INFO("FFT 플랜 생성 완료, FFT 실행 중...");
+
+  std::vector<std::complex<float>> fft_output(N / 2 + 1);
+  fft_plan->forward(fft_input.data(), fft_output.data());
   SPDLOG_INFO("FFT 실행 완료");
 
   // Compute magnitudes for first N/2 bins and find top peaks
@@ -111,7 +123,7 @@ int main() {
   std::vector<std::pair<float, size_t>> mags;
   mags.reserve(half);
   for (size_t k = 0; k < half; ++k) {
-    float m = std::sqrt(out[k].r * out[k].r + out[k].i * out[k].i);
+    float m = std::abs(fft_output[k]);
     mags.emplace_back(m, k);
   }
   std::sort(mags.begin(), mags.end(), [](auto &a, auto &b){ return a.first > b.first; });
@@ -126,12 +138,7 @@ int main() {
     SPDLOG_INFO("  {:2}: 크기={:.6f}, 빈={}, 주파수={:.2f} Hz", (int)i + 1, magnitude, bin, freq);
   }
 
-  // Cleanup
-  SPDLOG_INFO("메모리 정리 중...");
-  std::free(in);
-  std::free(out);
-  std::free(cfg); // kiss_fft_alloc uses malloc internally
-  SPDLOG_INFO("메모리 정리 완료");
+  SPDLOG_INFO("FFT 처리 완료");
 
   // WavWriter를 사용해서 간단한 톤 생성 및 저장 테스트
   SPDLOG_INFO("WAV 파일 쓰기 테스트 시작");

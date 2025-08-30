@@ -98,3 +98,15 @@ cc_test(
     ],
     copts = ["-std=c++17"],
 )
+
+cc_test(
+    name = "fft_test",
+    size = "small",
+    srcs = ["fft_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp/fft:fft",
+    ],
+    copts = ["-std=c++17"],
+)

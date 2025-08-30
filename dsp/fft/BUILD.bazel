@@ -1,0 +1,34 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+# FFT 백엔드 설정 (현재는 kissfft만 지원)
+config_setting(
+    name = "backend_kissfft",
+    values = {"define": "FFT_BACKEND=kissfft"},
+)
+
+# FFT API 라이브러리
+cc_library(
+    name = "fft_api",
+    hdrs = ["api/fft_api.h"],
+    visibility = ["//visibility:public"],
+    deps = [],
+)
+
+# KissFFT 백엔드
+cc_library(
+    name = "kissfft_backend",
+    srcs = ["backends/kissfft_adapter.cc"],
+    hdrs = ["api/fft_api.h"],
+    deps = [
+        ":fft_api",
+        "//third_party:kissfft",
+    ],
+    copts = ["-std=c++17"],
+)
+
+# FFT 메인 라이브러리
+cc_library(
+    name = "fft",
+    visibility = ["//visibility:public"],
+    deps = [":kissfft_backend"],  # 현재는 kissfft만 지원
+)

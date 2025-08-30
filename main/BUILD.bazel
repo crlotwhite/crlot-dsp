@@ -3,10 +3,13 @@ load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 cc_binary(
     name = "main",
     srcs = ["main.cc"],
+    data = [
+        "//assets:oboe_wav",
+    ],
     deps = [
         "@fmt//:fmt",
         "//third_party:dr_libs",
-        "//third_party:kissfft",
+        "//dsp/fft:fft",
         "//io:wav",
         "@spdlog//:spdlog",
     ],
