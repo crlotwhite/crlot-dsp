@@ -1,7 +1,6 @@
 package(default_visibility = ["//visibility:public"])
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
 cc_library(
     name = "dr_libs",
@@ -9,21 +8,24 @@ cc_library(
     includes = ["dr_libs"],
 )
 
-cmake(
+cc_library(
     name = "kissfft",
-    lib_source = "@kissfft_src//:all_srcs",
-    cache_entries = {
-        "KISSFFT_STATIC": "ON",
-        "KISSFFT_TEST": "OFF",
-        "KISSFFT_TOOLS": "OFF",
-        "KISSFFT_DATATYPE": "float",  # double/int16_t 등도 가능
-        "KISSFFT_OPENMP": "OFF",      # macOS/clang이면 보통 OFF 유지
-    },
-    targets = ["install"],
-    out_static_libs = select({
-        "@@platforms//os:windows": ["kissfft-float.lib"],
-        "//conditions:default":   ["libkissfft-float.a"],
-    }),
-    # kissfft CMake가 보통 include/<...>로 설치하므로 include 루트를 노출
-    includes = ["include"],  # 필요시 ["include/kissfft"]로 세분화
+    srcs = [
+        "kissfft/kiss_fft.c",
+        "kissfft/kiss_fftr.c",
+        "kissfft/kiss_fftnd.c",
+        "kissfft/kiss_fftndr.c",
+    ],
+    hdrs = [
+        "kissfft/kiss_fft.h",
+        "kissfft/kiss_fftr.h",
+        "kissfft/kiss_fftnd.h",
+        "kissfft/kiss_fftndr.h",
+        "kissfft/_kiss_fft_guts.h",
+        "kissfft/kiss_fft_log.h",
+        "kissfft/kissfft.hh",
+    ],
+    defines = ["KISSFFT_DATATYPE=float"],
+    strip_include_prefix = "kissfft",
+    copts = ["-Wno-unused-variable"],  # 경고 억제
 )

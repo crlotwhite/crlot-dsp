@@ -8,7 +8,7 @@
 #include <cstdlib>
 
 #include "io/wav.h"
-#include <kissfft/kiss_fft.h>
+#include "kiss_fft.h"
 
 int main() {
   // spdlog 로거 설정
