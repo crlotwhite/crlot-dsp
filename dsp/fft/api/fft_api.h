@@ -32,6 +32,18 @@ public:
 
   // 역방향 FFT: 복소 입력 -> 실수 출력 (IRFFT)
   virtual void inverse(const std::complex<float>* in, float* out, int batch = 1) = 0;
+
+  // Phase 3: Complex 도메인 확장 - 복소 입력/출력 FFT
+  // 순방향 Complex FFT: 복소 입력 -> 복소 출력 (CFFT)
+  virtual void forward_complex(const std::complex<float>* in, std::complex<float>* out, int batch = 1) = 0;
+
+  // 역방향 Complex FFT: 복소 입력 -> 복소 출력 (ICFFT)
+  virtual void inverse_complex(const std::complex<float>* in, std::complex<float>* out, int batch = 1) = 0;
+
+  // 플랜 정보 조회
+  virtual FftDomain domain() const = 0;
+  virtual int size() const = 0;
+  virtual bool supports_batch() const { return false; }  // 기본적으로 배치 미지원
 };
 
 // FFT 플랜 팩토리 함수
