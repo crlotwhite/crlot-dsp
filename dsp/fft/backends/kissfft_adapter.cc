@@ -16,9 +16,14 @@ public:
       throw std::runtime_error("Unsupported FFT domain");
     }
 
-    // stride/batch는 1로 제한
-    if (desc.batch != 1 || desc.stride_in != 1 || desc.stride_out != 1) {
-      throw std::runtime_error("Batch and stride must be 1 (currently limited)");
+    // 피드백 반영: 배치 지원 확장
+    if (desc.batch < 1 || desc.batch > 16) {
+      throw std::runtime_error("Batch size must be between 1 and 16");
+    }
+
+    // 스트라이드 검증 (배치 처리용)
+    if (desc.stride_in < 1 || desc.stride_out < 1) {
+      throw std::runtime_error("Stride must be at least 1");
     }
 
     // in_place는 현재 미지원
@@ -79,29 +84,40 @@ public:
     if (desc_.domain != FftDomain::Real) {
       throw std::runtime_error("Real FFT not supported for Complex domain plan");
     }
-    if (batch != 1) {
-      throw std::runtime_error("Batch size must be 1");
+
+    // 피드백 반영: 배치 처리 지원
+    if (batch < 1 || batch > desc_.batch) {
+      throw std::runtime_error("Invalid batch size");
     }
 
-    // NaN/denormal 입력 검증 및 정리
-    std::vector<float> cleaned_input(desc_.nfft);
-    for (int i = 0; i < desc_.nfft; ++i) {
-      float val = in[i];
-      if (std::isnan(val) || std::isinf(val)) {
-        val = 0.0f;  // NaN/inf를 0으로 대체
-      } else if (std::abs(val) < 1e-30f) {
-        val = 0.0f;  // denormal을 0으로
+    const int output_size = desc_.nfft / 2 + 1;
+
+    // 배치별 처리
+    for (int b = 0; b < batch; ++b) {
+      const float* batch_input = in + b * desc_.stride_in * desc_.nfft;
+      std::complex<float>* batch_output = out + b * desc_.stride_out * output_size;
+
+      // NaN/denormal 입력 검증 및 정리
+      std::vector<float> cleaned_input(desc_.nfft);
+      for (int i = 0; i < desc_.nfft; ++i) {
+        float val = batch_input[i * desc_.stride_in];
+        if (std::isnan(val) || std::isinf(val)) {
+          val = 0.0f;  // NaN/inf를 0으로 대체
+        } else if (std::abs(val) < 1e-30f) {
+          val = 0.0f;  // denormal을 0으로
+        }
+        cleaned_input[i] = val;
       }
-      cleaned_input[i] = val;
-    }
 
-    // KissFFT Real 순방향 실행
-    kiss_fftr(forward_real_cfg_, cleaned_input.data(),
-              reinterpret_cast<kiss_fft_cpx*>(real_output_buffer_.data()));
+      // KissFFT Real 순방향 실행
+      kiss_fftr(forward_real_cfg_, cleaned_input.data(),
+                reinterpret_cast<kiss_fft_cpx*>(real_output_buffer_.data()));
 
-    // 결과를 std::complex<float>로 복사
-    for (size_t i = 0; i < real_output_buffer_.size(); ++i) {
-      out[i] = std::complex<float>(real_output_buffer_[i].r, real_output_buffer_[i].i);
+      // 결과를 std::complex<float>로 복사 (스트라이드 적용)
+      for (int i = 0; i < output_size; ++i) {
+        batch_output[i * desc_.stride_out] = std::complex<float>(
+          real_output_buffer_[i].r, real_output_buffer_[i].i);
+      }
     }
   }
 
@@ -109,29 +125,44 @@ public:
     if (desc_.domain != FftDomain::Real) {
       throw std::runtime_error("Real FFT not supported for Complex domain plan");
     }
-    if (batch != 1) {
-      throw std::runtime_error("Batch size must be 1");
+
+    // 피드백 반영: 배치 처리 지원
+    if (batch < 1 || batch > desc_.batch) {
+      throw std::runtime_error("Invalid batch size");
     }
 
-    // 입력을 kiss_fft_cpx로 변환
-    for (size_t i = 0; i < real_output_buffer_.size(); ++i) {
-      real_output_buffer_[i].r = in[i].real();
-      real_output_buffer_[i].i = in[i].imag();
-    }
+    const int input_size = desc_.nfft / 2 + 1;
+    std::vector<float> batch_output(desc_.nfft);
 
-    // KissFFT Real 역방향 실행
-    kiss_fftri(inverse_real_cfg_, reinterpret_cast<kiss_fft_cpx*>(real_output_buffer_.data()), out);
+    // 배치별 처리
+    for (int b = 0; b < batch; ++b) {
+      const std::complex<float>* batch_input = in + b * desc_.stride_in * input_size;
+      float* batch_output_ptr = out + b * desc_.stride_out * desc_.nfft;
 
-    // 정규화 (FFT 크기로 나누기)
-    float scale = 1.0f / desc_.nfft;
-    for (int i = 0; i < desc_.nfft; ++i) {
-      out[i] *= scale;
+      // 입력을 kiss_fft_cpx로 변환 (스트라이드 적용)
+      for (int i = 0; i < input_size; ++i) {
+        const auto& complex_val = batch_input[i * desc_.stride_in];
+        real_output_buffer_[i].r = complex_val.real();
+        real_output_buffer_[i].i = complex_val.imag();
+      }
 
-      // NaN/denormal 출력 정리
-      if (std::isnan(out[i]) || std::isinf(out[i])) {
-        out[i] = 0.0f;
-      } else if (std::abs(out[i]) < 1e-30f) {
-        out[i] = 0.0f;
+      // KissFFT Real 역방향 실행
+      kiss_fftri(inverse_real_cfg_, reinterpret_cast<kiss_fft_cpx*>(real_output_buffer_.data()),
+                 batch_output.data());
+
+      // 정규화 및 출력 복사 (스트라이드 적용)
+      float scale = 1.0f / desc_.nfft;
+      for (int i = 0; i < desc_.nfft; ++i) {
+        float val = batch_output[i] * scale;
+
+        // NaN/denormal 출력 정리
+        if (std::isnan(val) || std::isinf(val)) {
+          val = 0.0f;
+        } else if (std::abs(val) < 1e-30f) {
+          val = 0.0f;
+        }
+
+        batch_output_ptr[i * desc_.stride_out] = val;
       }
     }
   }
@@ -141,22 +172,32 @@ public:
     if (desc_.domain != FftDomain::Complex) {
       throw std::runtime_error("Complex FFT not supported for Real domain plan");
     }
-    if (batch != 1) {
-      throw std::runtime_error("Batch size must be 1");
+
+    // 피드백 반영: 배치 처리 지원
+    if (batch < 1 || batch > desc_.batch) {
+      throw std::runtime_error("Invalid batch size");
     }
 
-    // 입력을 kiss_fft_cpx로 변환
-    for (int i = 0; i < desc_.nfft; ++i) {
-      complex_buffer_[i].r = in[i].real();
-      complex_buffer_[i].i = in[i].imag();
-    }
+    // 배치별 처리
+    for (int b = 0; b < batch; ++b) {
+      const std::complex<float>* batch_input = in + b * desc_.stride_in * desc_.nfft;
+      std::complex<float>* batch_output = out + b * desc_.stride_out * desc_.nfft;
 
-    // KissFFT Complex 순방향 실행
-    kiss_fft(forward_complex_cfg_, complex_buffer_.data(), complex_buffer_.data());
+      // 입력을 kiss_fft_cpx로 변환 (스트라이드 적용)
+      for (int i = 0; i < desc_.nfft; ++i) {
+        const auto& complex_val = batch_input[i * desc_.stride_in];
+        complex_buffer_[i].r = complex_val.real();
+        complex_buffer_[i].i = complex_val.imag();
+      }
 
-    // 결과를 std::complex<float>로 복사
-    for (int i = 0; i < desc_.nfft; ++i) {
-      out[i] = std::complex<float>(complex_buffer_[i].r, complex_buffer_[i].i);
+      // KissFFT Complex 순방향 실행
+      kiss_fft(forward_complex_cfg_, complex_buffer_.data(), complex_buffer_.data());
+
+      // 결과를 std::complex<float>로 복사 (스트라이드 적용)
+      for (int i = 0; i < desc_.nfft; ++i) {
+        batch_output[i * desc_.stride_out] = std::complex<float>(
+          complex_buffer_[i].r, complex_buffer_[i].i);
+      }
     }
   }
 
@@ -164,34 +205,43 @@ public:
     if (desc_.domain != FftDomain::Complex) {
       throw std::runtime_error("Complex FFT not supported for Real domain plan");
     }
-    if (batch != 1) {
-      throw std::runtime_error("Batch size must be 1");
+
+    // 피드백 반영: 배치 처리 지원
+    if (batch < 1 || batch > desc_.batch) {
+      throw std::runtime_error("Invalid batch size");
     }
 
-    // 입력을 kiss_fft_cpx로 변환
-    for (int i = 0; i < desc_.nfft; ++i) {
-      complex_buffer_[i].r = in[i].real();
-      complex_buffer_[i].i = in[i].imag();
-    }
+    // 배치별 처리
+    for (int b = 0; b < batch; ++b) {
+      const std::complex<float>* batch_input = in + b * desc_.stride_in * desc_.nfft;
+      std::complex<float>* batch_output = out + b * desc_.stride_out * desc_.nfft;
 
-    // KissFFT Complex 역방향 실행
-    kiss_fft(inverse_complex_cfg_, complex_buffer_.data(), complex_buffer_.data());
-
-    // 정규화 및 결과 복사
-    float scale = 1.0f / desc_.nfft;
-    for (int i = 0; i < desc_.nfft; ++i) {
-      float real_val = complex_buffer_[i].r * scale;
-      float imag_val = complex_buffer_[i].i * scale;
-
-      // NaN/denormal 정리
-      if (std::isnan(real_val) || std::isinf(real_val) || std::abs(real_val) < 1e-30f) {
-        real_val = 0.0f;
-      }
-      if (std::isnan(imag_val) || std::isinf(imag_val) || std::abs(imag_val) < 1e-30f) {
-        imag_val = 0.0f;
+      // 입력을 kiss_fft_cpx로 변환 (스트라이드 적용)
+      for (int i = 0; i < desc_.nfft; ++i) {
+        const auto& complex_val = batch_input[i * desc_.stride_in];
+        complex_buffer_[i].r = complex_val.real();
+        complex_buffer_[i].i = complex_val.imag();
       }
 
-      out[i] = std::complex<float>(real_val, imag_val);
+      // KissFFT Complex 역방향 실행
+      kiss_fft(inverse_complex_cfg_, complex_buffer_.data(), complex_buffer_.data());
+
+      // 정규화 및 결과 복사 (스트라이드 적용)
+      float scale = 1.0f / desc_.nfft;
+      for (int i = 0; i < desc_.nfft; ++i) {
+        float real_val = complex_buffer_[i].r * scale;
+        float imag_val = complex_buffer_[i].i * scale;
+
+        // NaN/denormal 정리
+        if (std::isnan(real_val) || std::isinf(real_val) || std::abs(real_val) < 1e-30f) {
+          real_val = 0.0f;
+        }
+        if (std::isnan(imag_val) || std::isinf(imag_val) || std::abs(imag_val) < 1e-30f) {
+          imag_val = 0.0f;
+        }
+
+        batch_output[i * desc_.stride_out] = std::complex<float>(real_val, imag_val);
+      }
     }
   }
 

@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <memory>
 #include <mutex>
+#include <atomic>
 
 namespace dsp {
 
@@ -131,12 +132,27 @@ public:
     /**
      * 지정된 타입과 크기의 윈도우 함수 반환 (캐시 기능)
      *
+     * ⚠️  스레드 안전성 개선:
+     * - shared_ptr 기반으로 메모리 안전성 보장
+     * - clearCache() 호출 시에도 기존 참조는 유효 유지
+     * - Generation 기반 캐시 무효화 지원
+     *
      * @param type 윈도우 함수 타입
      * @param N 윈도우 크기
      * @param periodic FFT용(true) vs 분석창용(false)
      * @param norm 정규화 타입
-     * @return 윈도우 함수 데이터 포인터 (크기 N)
+     * @return 윈도우 함수 데이터의 안전한 참조 (크기 N)
      */
+    std::shared_ptr<const float> GetWindowSafe(WindowType type, size_t N, bool periodic = false,
+                                              NormalizationType norm = NormalizationType::NONE);
+
+    /**
+     * 하위 호환성을 위한 기존 API (deprecated)
+     *
+     * ⚠️  주의: 멀티스레드 환경에서 clearCache() 호출 시 UAF 위험
+     * 새로운 코드에서는 GetWindowSafe() 사용 권장
+     */
+    [[deprecated("Use GetWindowSafe() for thread safety")]]
     const float* GetWindow(WindowType type, size_t N, bool periodic = false,
                           NormalizationType norm = NormalizationType::NONE);
 
@@ -151,15 +167,21 @@ public:
     size_t getCacheSize() const;
 
     /**
-     * 캐시 초기화 (테스트용)
+     * 캐시 초기화 (개선된 안전성)
      *
-     * ⚠️  멀티스레드 안전성 주의사항:
-     * - 이 함수는 주로 테스트 환경에서 사용됩니다
-     * - 운영 환경에서 호출 시 다른 스레드가 윈도우 데이터를 사용 중이면 UAF 위험이 있습니다
-     * - 멀티스레드 환경에서는 모든 스레드가 윈도우 사용을 완료한 후에만 호출하세요
-     * - 또는 shared_ptr 기반 핸들 시스템으로 업그레이드를 고려하세요
+     * ✅ 개선된 안전성:
+     * - Generation 기반 무효화로 기존 참조는 계속 유효
+     * - shared_ptr 기반으로 메모리 안전성 보장
+     * - 멀티스레드 환경에서 안전하게 사용 가능
+     *
+     * @param force_immediate true시 즉시 메모리 해제 (테스트용)
      */
-    void clearCache();
+    void clearCache(bool force_immediate = false);
+
+    /**
+     * 현재 캐시 generation 반환
+     */
+    uint64_t getCurrentGeneration() const;
 
     /**
      * 윈도우 함수의 합 계산 (정규화 검증용)
@@ -243,9 +265,25 @@ private:
 private:
     std::unique_ptr<WindowData> window_data_;  // 인스턴스 윈도우 데이터
 
-    // 정적 캐시 (하위 호환성)
+    // 안전한 캐시 엔트리 구조
+    struct SafeCacheEntry {
+        std::shared_ptr<WindowData> data;
+        uint64_t generation;
+
+        // 기본 생성자 (std::unordered_map 호환성)
+        SafeCacheEntry() : data(nullptr), generation(0) {}
+
+        SafeCacheEntry(std::shared_ptr<WindowData> d, uint64_t gen)
+            : data(std::move(d)), generation(gen) {}
+    };
+
+    // 정적 캐시 (개선된 안전성)
     static std::mutex cache_mutex_;
-    static std::unordered_map<uint64_t, std::unique_ptr<WindowData>> cache_;
+    static std::unordered_map<uint64_t, SafeCacheEntry> safe_cache_;
+    static std::atomic<uint64_t> current_generation_;
+
+    // 하위 호환성을 위한 기존 캐시 (deprecated)
+    static std::unordered_map<uint64_t, std::unique_ptr<WindowData>> legacy_cache_;
 };
 
 } // namespace dsp

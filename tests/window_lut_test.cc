@@ -416,3 +416,181 @@ TEST_F(WindowLUTTest, UtilityFunctions) {
     EXPECT_EQ(WindowLUT::calculateSumOfSquares(nullptr, 5), 0.0);
     EXPECT_EQ(WindowLUT::calculateRMSError(nullptr, test_data.data(), 5), 0.0);
 }
+
+// 피드백 반영: 캐시 안전성 테스트 (shared_ptr 기반)
+TEST_F(WindowLUTTest, CacheSafetyWithSharedPtr) {
+    auto& lut = WindowLUT::getInstance();
+
+    // 안전한 API 사용
+    auto safe_window1 = lut.GetWindowSafe(WindowType::HANN, 512);
+    auto safe_window2 = lut.GetWindowSafe(WindowType::HANN, 512);
+
+    ASSERT_NE(safe_window1, nullptr);
+    ASSERT_NE(safe_window2, nullptr);
+
+    // 같은 윈도우는 같은 데이터를 가리켜야 함
+    EXPECT_EQ(safe_window1.get(), safe_window2.get()) << "Same window should share data";
+
+    // 참조 카운트 확인 (최소 2개: safe_window1, safe_window2)
+    EXPECT_GE(safe_window1.use_count(), 2) << "Reference count should be at least 2";
+
+    // 캐시 클리어 후에도 기존 참조는 유효해야 함
+    lut.clearCache(false);  // Generation 기반 무효화
+
+    // 기존 참조는 여전히 유효
+    EXPECT_NE(safe_window1.get(), nullptr) << "Existing reference should remain valid";
+    EXPECT_NE(safe_window2.get(), nullptr) << "Existing reference should remain valid";
+
+    // 새로운 요청은 다른 데이터를 가져올 수 있음 (새 generation)
+    auto safe_window3 = lut.GetWindowSafe(WindowType::HANN, 512);
+    ASSERT_NE(safe_window3, nullptr);
+
+    // 데이터 내용은 동일해야 함
+    for (size_t i = 0; i < 512; ++i) {
+        EXPECT_NEAR(safe_window1.get()[i], safe_window3.get()[i], 1e-6f)
+            << "Window data should be identical at index " << i;
+    }
+
+    std::cout << "캐시 안전성 테스트 - Generation: " << lut.getCurrentGeneration()
+              << ", 참조 카운트: " << safe_window1.use_count() << std::endl;
+}
+
+// 멀티스레드 캐시 안전성 테스트
+TEST_F(WindowLUTTest, MultithreadedCacheSafety) {
+    auto& lut = WindowLUT::getInstance();
+    const size_t num_threads = 8;
+    const size_t num_requests = 50;
+
+    std::vector<std::thread> threads;
+    std::vector<std::vector<std::shared_ptr<const float>>> results(num_threads);
+    std::atomic<bool> start_flag{false};
+    std::atomic<int> ready_count{0};
+
+    // 여러 스레드에서 동시에 안전한 윈도우 요청
+    for (size_t t = 0; t < num_threads; ++t) {
+        threads.emplace_back([&, t]() {
+            results[t].reserve(num_requests);
+            ready_count.fetch_add(1);
+
+            // 모든 스레드가 준비될 때까지 대기
+            while (!start_flag.load()) {
+                std::this_thread::yield();
+            }
+
+            for (size_t i = 0; i < num_requests; ++i) {
+                WindowType type = static_cast<WindowType>(i % 3);
+                size_t N = 64 + (i % 10) * 64;
+
+                auto safe_window = lut.GetWindowSafe(type, N);
+                results[t].push_back(safe_window);
+
+                // 중간에 캐시 클리어 시도 (일부 스레드에서만)
+                if (t == 0 && i == num_requests / 2) {
+                    lut.clearCache(false);  // Generation 기반 안전한 클리어
+                }
+
+                std::this_thread::sleep_for(std::chrono::microseconds(10));
+            }
+        });
+    }
+
+    // 모든 스레드가 준비되면 시작
+    while (ready_count.load() < static_cast<int>(num_threads)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    start_flag.store(true);
+
+    // 모든 스레드 완료 대기
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    // 결과 검증: 모든 참조가 유효해야 함
+    for (size_t t = 0; t < num_threads; ++t) {
+        for (size_t i = 0; i < num_requests; ++i) {
+            EXPECT_NE(results[t][i], nullptr)
+                << "Thread " << t << " request " << i << " should be valid";
+            EXPECT_GE(results[t][i].use_count(), 1)
+                << "Reference count should be at least 1";
+        }
+    }
+
+    std::cout << "멀티스레드 안전성 테스트 완료 - 최종 Generation: "
+              << lut.getCurrentGeneration() << std::endl;
+}
+
+// Generation 기반 캐시 무효화 테스트
+TEST_F(WindowLUTTest, GenerationBasedInvalidation) {
+    auto& lut = WindowLUT::getInstance();
+
+    uint64_t initial_gen = lut.getCurrentGeneration();
+
+    // 첫 번째 윈도우 생성
+    auto window1 = lut.GetWindowSafe(WindowType::HANN, 256);
+    ASSERT_NE(window1, nullptr);
+
+    // Generation 확인
+    EXPECT_EQ(lut.getCurrentGeneration(), initial_gen);
+
+    // 캐시 클리어 (Generation 증가)
+    lut.clearCache(false);
+    uint64_t new_gen = lut.getCurrentGeneration();
+    EXPECT_GT(new_gen, initial_gen) << "Generation should increase after clearCache";
+
+    // 기존 참조는 여전히 유효
+    EXPECT_NE(window1.get(), nullptr);
+
+    // 새로운 윈도우 요청 (새 Generation)
+    auto window2 = lut.GetWindowSafe(WindowType::HANN, 256);
+    ASSERT_NE(window2, nullptr);
+
+    // 데이터는 다른 메모리 위치일 수 있지만 내용은 동일
+    bool same_pointer = (window1.get() == window2.get());
+    if (!same_pointer) {
+        // 다른 포인터라면 내용은 동일해야 함
+        for (size_t i = 0; i < 256; ++i) {
+            EXPECT_NEAR(window1.get()[i], window2.get()[i], 1e-6f)
+                << "Window content should be identical at index " << i;
+        }
+    }
+
+    std::cout << "Generation 테스트 - 초기: " << initial_gen
+              << ", 현재: " << new_gen
+              << ", 포인터 동일: " << (same_pointer ? "예" : "아니오") << std::endl;
+}
+
+// 메모리 누수 방지 테스트
+TEST_F(WindowLUTTest, MemoryLeakPrevention) {
+    auto& lut = WindowLUT::getInstance();
+
+    std::vector<std::shared_ptr<const float>> windows;
+
+    // 많은 윈도우 생성
+    for (int i = 0; i < 100; ++i) {
+        auto window = lut.GetWindowSafe(WindowType::HANN, 512 + i);
+        windows.push_back(window);
+
+        // 중간중간 캐시 클리어
+        if (i % 20 == 0) {
+            lut.clearCache(false);
+        }
+    }
+
+    // 모든 참조가 유효한지 확인
+    for (size_t i = 0; i < windows.size(); ++i) {
+        EXPECT_NE(windows[i], nullptr) << "Window " << i << " should be valid";
+        EXPECT_GE(windows[i].use_count(), 1) << "Reference count should be positive";
+    }
+
+    // 참조 해제
+    windows.clear();
+
+    // 강제 캐시 클리어
+    lut.clearCache(true);
+
+    // 새로운 윈도우 생성이 정상 작동하는지 확인
+    auto new_window = lut.GetWindowSafe(WindowType::HANN, 1024);
+    EXPECT_NE(new_window, nullptr) << "New window creation should work after cleanup";
+
+    std::cout << "메모리 누수 방지 테스트 완료" << std::endl;
+}

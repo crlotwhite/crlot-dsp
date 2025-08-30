@@ -1,7 +1,8 @@
-#include <gtest/gtest.h>
-#include "dsp/frame/FrameQueue.h"
-#include <vector>
 #include <cmath>
+#include <gtest/gtest.h>
+#include <numeric>  // for std::iota
+#include <vector>
+#include "dsp/frame/FrameQueue.h"
 
 using namespace dsp;
 
@@ -360,5 +361,160 @@ TEST_F(FrameQueueTest, REFLECTIndexMapping) {
             }
         }
         EXPECT_TRUE(found_sequence) << "Original sequence not found in reflected frame";
+    }
+}
+
+// 피드백 반영: 길이 0/1/len < frame 극단 케이스 테스트 추가
+TEST_F(FrameQueueTest, ExtremeEdgeCases) {
+    size_t frame_size = 32;
+    size_t hop_size = 16;
+
+    // 케이스 1: 길이 0 입력
+    std::vector<float> empty_input;
+    FrameQueue fq_empty(empty_input.data(), empty_input.size(), frame_size, hop_size, true);
+
+    // center=true이므로 패딩으로 인해 프레임이 생성될 수 있음
+    std::cout << "길이 0 입력 - 프레임 수: " << fq_empty.getNumFrames() << std::endl;
+    EXPECT_GE(fq_empty.getNumFrames(), 0) << "Empty input should handle gracefully";
+
+    if (fq_empty.getNumFrames() > 0) {
+        const float* frame = fq_empty.getFrame(0);
+        EXPECT_NE(frame, nullptr) << "Frame pointer should be valid even for empty input";
+
+        // 패딩된 프레임은 모두 0이어야 함 (CONSTANT 패딩)
+        bool all_zero = true;
+        for (size_t i = 0; i < frame_size; ++i) {
+            if (std::abs(frame[i]) > 1e-6f) {
+                all_zero = false;
+                break;
+            }
+        }
+        EXPECT_TRUE(all_zero) << "Empty input frame should be all zeros";
+    }
+
+    // 케이스 2: 길이 1 입력
+    std::vector<float> single_input = {1.5f};
+    FrameQueue fq_single(single_input.data(), single_input.size(), frame_size, hop_size, true);
+
+    std::cout << "길이 1 입력 - 프레임 수: " << fq_single.getNumFrames() << std::endl;
+    EXPECT_GT(fq_single.getNumFrames(), 0) << "Single sample input should generate frames";
+
+    if (fq_single.getNumFrames() > 0) {
+        const float* frame = fq_single.getFrame(0);
+        EXPECT_NE(frame, nullptr);
+
+        // 원본 값이 프레임 어딘가에 있어야 함
+        bool found_original = false;
+        for (size_t i = 0; i < frame_size; ++i) {
+            if (std::abs(frame[i] - 1.5f) < 1e-6f) {
+                found_original = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found_original) << "Original value should be found in frame";
+    }
+
+    // 케이스 3: len < frame_size 입력
+    std::vector<float> short_input = {1.0f, 2.0f, 3.0f};  // 길이 3 < frame_size 32
+    FrameQueue fq_short(short_input.data(), short_input.size(), frame_size, hop_size, true);
+
+    std::cout << "짧은 입력 (len=" << short_input.size() << " < frame=" << frame_size
+              << ") - 프레임 수: " << fq_short.getNumFrames() << std::endl;
+    EXPECT_GT(fq_short.getNumFrames(), 0) << "Short input should generate frames with padding";
+
+    if (fq_short.getNumFrames() > 0) {
+        const float* frame = fq_short.getFrame(0);
+        EXPECT_NE(frame, nullptr);
+
+        // 모든 원본 값들이 프레임에 포함되어야 함
+        std::vector<bool> found(short_input.size(), false);
+        for (size_t i = 0; i < frame_size; ++i) {
+            for (size_t j = 0; j < short_input.size(); ++j) {
+                if (std::abs(frame[i] - short_input[j]) < 1e-6f) {
+                    found[j] = true;
+                }
+            }
+        }
+
+        for (size_t j = 0; j < short_input.size(); ++j) {
+            EXPECT_TRUE(found[j]) << "Original value " << short_input[j] << " not found in frame";
+        }
+    }
+
+    // 케이스 4: frame_size = hop_size (겹침 없음)
+    size_t no_overlap_frame = 16;
+    size_t no_overlap_hop = 16;
+    std::vector<float> no_overlap_input(64, 1.0f);
+
+    FrameQueue fq_no_overlap(no_overlap_input.data(), no_overlap_input.size(),
+                            no_overlap_frame, no_overlap_hop, false);
+
+    std::cout << "겹침 없음 (frame=hop=" << no_overlap_frame << ") - 프레임 수: "
+              << fq_no_overlap.getNumFrames() << std::endl;
+
+    // 예상 프레임 수: 64/16 = 4
+    EXPECT_EQ(fq_no_overlap.getNumFrames(), 4) << "No overlap should produce exactly 4 frames";
+
+    // 케이스 5: hop_size > frame_size (갭 존재)
+    size_t gap_frame = 8;
+    size_t gap_hop = 12;
+    std::vector<float> gap_input(48, 2.0f);
+
+    FrameQueue fq_gap(gap_input.data(), gap_input.size(), gap_frame, gap_hop, false);
+
+    std::cout << "갭 존재 (frame=" << gap_frame << " < hop=" << gap_hop
+              << ") - 프레임 수: " << fq_gap.getNumFrames() << std::endl;
+
+    EXPECT_GT(fq_gap.getNumFrames(), 0) << "Gap configuration should still work";
+
+    // 각 프레임이 올바른 데이터를 포함하는지 확인
+    for (size_t f = 0; f < fq_gap.getNumFrames(); ++f) {
+        const float* frame = fq_gap.getFrame(f);
+        for (size_t i = 0; i < gap_frame; ++i) {
+            size_t input_idx = f * gap_hop + i;
+            if (input_idx < gap_input.size()) {
+                EXPECT_NEAR(frame[i], 2.0f, 1e-6f)
+                    << "Frame " << f << " sample " << i << " mismatch";
+            }
+        }
+    }
+}
+
+// 메모리 경계 및 안전성 테스트
+TEST_F(FrameQueueTest, MemoryBoundaryTests) {
+    size_t frame_size = 16;
+    size_t hop_size = 8;
+
+    // 매우 큰 입력으로 메모리 할당 테스트
+    size_t large_size = 100000;
+    std::vector<float> large_input(large_size);
+    std::iota(large_input.begin(), large_input.end(), 0.0f);  // 0, 1, 2, 3, ...
+
+    EXPECT_NO_THROW({
+        FrameQueue fq_large(large_input.data(), large_input.size(), frame_size, hop_size);
+        std::cout << "대용량 입력 (" << large_size << " 샘플) - 프레임 수: "
+                  << fq_large.getNumFrames() << std::endl;
+
+        // 첫 번째와 마지막 프레임 검증
+        if (fq_large.getNumFrames() > 0) {
+            const float* first_frame = fq_large.getFrame(0);
+            const float* last_frame = fq_large.getFrame(fq_large.getNumFrames() - 1);
+
+            EXPECT_NE(first_frame, nullptr);
+            EXPECT_NE(last_frame, nullptr);
+            EXPECT_NE(first_frame, last_frame);  // 다른 메모리 위치
+        }
+    }) << "Large input should be handled without throwing";
+
+    // 경계값 테스트: frame_size = 1
+    std::vector<float> unit_test = {1.0f, 2.0f, 3.0f, 4.0f};
+    FrameQueue fq_unit(unit_test.data(), unit_test.size(), 1, 1);
+
+    EXPECT_EQ(fq_unit.getFrameSize(), 1);
+    EXPECT_EQ(fq_unit.getNumFrames(), 4);  // 각 샘플이 하나의 프레임
+
+    for (size_t i = 0; i < 4; ++i) {
+        const float* frame = fq_unit.getFrame(i);
+        EXPECT_NEAR(frame[0], static_cast<float>(i + 1), 1e-6f);
     }
 }

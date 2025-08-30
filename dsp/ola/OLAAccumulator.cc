@@ -4,6 +4,29 @@
 #include <stdexcept>
 #include <cstring>
 
+// SIMD 최적화 지원
+#if defined(_OPENMP) && SIMD_AVAILABLE
+#include <omp.h>
+#endif
+
+// 컴파일러별 SIMD 지원 확인
+#if defined(__AVX2__)
+#include <immintrin.h>
+#define SIMD_AVAILABLE 1
+#define SIMD_WIDTH 8  // AVX2: 8 floats
+#elif defined(__SSE2__)
+#include <emmintrin.h>
+#define SIMD_AVAILABLE 1
+#define SIMD_WIDTH 4  // SSE2: 4 floats
+#elif defined(__ARM_NEON)
+#include <arm_neon.h>
+#define SIMD_AVAILABLE 1
+#define SIMD_WIDTH 4  // NEON: 4 floats
+#else
+#define SIMD_AVAILABLE 0
+#define SIMD_WIDTH 1
+#endif
+
 namespace dsp {
 
 OLAAccumulator::OLAAccumulator(const OLAConfig& cfg)
@@ -89,7 +112,7 @@ int OLAAccumulator::pull(float* dst, int num_samples) {
     // 소비 샘플 수 업데이트
     consumed_samples_ += num_samples;
 
-    // 피크 미터 업데이트
+    // 피크 미터 업데이트 (인터리브된 샘플 수 전달)
     update_peak_meter(dst, num_samples * cfg_.channels);
 
     return num_samples;
@@ -155,40 +178,42 @@ void OLAAccumulator::initialize_normalization() {
     // 정규화 버퍼 초기화
     std::fill(norm_buffer_.begin(), norm_buffer_.end(), 0.0f);
 
-    // 링 버퍼의 주기성을 고려한 COLA 정규화
-    // 충분히 많은 프레임을 시뮬레이션하여 정상 상태 달성
+    // 개선된 COLA 정규화: 링 버퍼 크기에 맞춰 직접 계산
+    // 각 링 버퍼 위치에서 중첩되는 윈도우들의 합을 계산
 
-    // 임시 버퍼: 링 버퍼보다 충분히 큰 크기
-    size_t temp_len = ring_len_ * 3;  // 3배 크기로 충분한 여유
-    std::vector<float> temp_norm(temp_len, 0.0f);
+    for (size_t ring_pos = 0; ring_pos < ring_len_; ++ring_pos) {
+        float overlap_sum = 0.0f;
 
-    // 충분한 수의 프레임으로 정상 상태 시뮬레이션
-    int num_frames = (temp_len / cfg_.hop_size) + 10;
+        // 이 링 위치에 영향을 주는 모든 프레임을 고려
+        // 프레임 k가 링 위치 ring_pos에 기여하는 조건:
+        // ring_pos = (k * hop_size + t) % ring_len_, 여기서 0 <= t < frame_size
 
-    for (int frame = 0; frame < num_frames; ++frame) {
-        int64_t frame_start = frame * cfg_.hop_size;
+        for (int frame_offset = -10; frame_offset <= 10; ++frame_offset) {
+            int64_t frame_start = frame_offset * cfg_.hop_size;
 
-        for (int t = 0; t < cfg_.frame_size; ++t) {
-            int64_t pos = frame_start + t;
-            if (pos >= 0 && pos < static_cast<int64_t>(temp_len)) {
-                float w = window_[t];
-                temp_norm[pos] += w;
+            for (int t = 0; t < cfg_.frame_size; ++t) {
+                int64_t sample_pos = frame_start + t;
+                size_t mapped_pos = static_cast<size_t>(sample_pos % static_cast<int64_t>(ring_len_));
+
+                // 음수 모듈로 처리
+                if (sample_pos < 0) {
+                    mapped_pos = ring_len_ - (static_cast<size_t>(-sample_pos) % ring_len_);
+                    if (mapped_pos == ring_len_) mapped_pos = 0;
+                }
+
+                if (mapped_pos == ring_pos) {
+                    overlap_sum += window_[t];
+                }
             }
         }
-    }
 
-    // 정상 상태 구간에서 한 주기만 추출하여 링 버퍼에 복사
-    // 중앙 부분에서 안정된 값들을 사용
-    size_t stable_start = ring_len_ * 2;  // 충분히 안정된 구간
-
-    for (size_t i = 0; i < ring_len_; ++i) {
-        norm_buffer_[i] = std::max(temp_norm[stable_start + i], 1e-8f);
+        // 정규화 계수 설정 (최소값 보장)
+        norm_buffer_[ring_pos] = std::max(overlap_sum, 1e-8f);
     }
 }
 
 void OLAAccumulator::add_frame_mono(int64_t start_sample, const float* frame) {
-    // Phase 3: SIMD 최적화 준비 - 벡터화 친화적 루프 구조
-    // TODO: 향후 #pragma omp simd 또는 AVX2 intrinsics 적용 가능
+    // 피드백 반영: SIMD 최적화 1차 투입 (OMP+SIMD)
 
     // 음수 시작 위치 처리를 위한 오프셋 계산
     int start_offset = 0;
@@ -199,57 +224,264 @@ void OLAAccumulator::add_frame_mono(int64_t start_sample, const float* frame) {
         }
     }
 
-    // 벡터화 가능한 메인 루프
     const int effective_size = cfg_.frame_size - start_offset;
     const int64_t effective_start = start_sample + start_offset;
 
-    // 윈도우 적용 여부에 따른 분기 (브랜치 예측 최적화)
+    // SIMD 최적화 적용 조건 확인
+    const bool use_simd = (effective_size >= SIMD_WIDTH * 2) && SIMD_AVAILABLE;
+
     if (cfg_.apply_window_inside && !window_.empty()) {
-        // 윈도우 적용 버전 (향후 SIMD 최적화 대상)
-        for (int t = 0; t < effective_size; ++t) {
-            int64_t sample_pos = effective_start + t;
+        // 윈도우 적용 버전 - SIMD 최적화
+        if (use_simd) {
+            add_frame_mono_windowed_simd(effective_start, frame, start_offset, effective_size);
+        } else {
+            add_frame_mono_windowed_scalar(effective_start, frame, start_offset, effective_size);
+        }
+    } else {
+        // 윈도우 미적용 버전 - SIMD 최적화
+        if (use_simd) {
+            add_frame_mono_plain_simd(effective_start, frame, start_offset, effective_size);
+        } else {
+            add_frame_mono_plain_scalar(effective_start, frame, start_offset, effective_size);
+        }
+    }
+}
+
+// SIMD 최적화된 윈도우 적용 버전
+void OLAAccumulator::add_frame_mono_windowed_simd(int64_t effective_start, const float* frame,
+                                                  int start_offset, int effective_size) {
+#if SIMD_AVAILABLE && defined(_OPENMP)
+    const int simd_end = (effective_size / SIMD_WIDTH) * SIMD_WIDTH;
+
+    // SIMD 처리 가능한 구간
+    #pragma omp simd safelen(SIMD_WIDTH)
+    for (int t = 0; t < simd_end; t += SIMD_WIDTH) {
+        // 벡터화된 처리를 위한 루프 언롤링
+        for (int i = 0; i < SIMD_WIDTH && (t + i) < effective_size; ++i) {
+            int64_t sample_pos = effective_start + t + i;
             size_t idx = ring_index(sample_pos);
-            int frame_idx = start_offset + t;
+            int frame_idx = start_offset + t + i;
 
             float x = frame[frame_idx] * gain_ * window_[frame_idx];
             ring_accum_[idx] += x;
         }
-    } else {
-        // 윈도우 미적용 버전 (향후 SIMD 최적화 대상)
-        for (int t = 0; t < effective_size; ++t) {
-            int64_t sample_pos = effective_start + t;
+    }
+
+    // 나머지 처리 (스칼라)
+    for (int t = simd_end; t < effective_size; ++t) {
+        int64_t sample_pos = effective_start + t;
+        size_t idx = ring_index(sample_pos);
+        int frame_idx = start_offset + t;
+
+        float x = frame[frame_idx] * gain_ * window_[frame_idx];
+        ring_accum_[idx] += x;
+    }
+#else
+    // SIMD 미지원 시 스칼라 버전으로 폴백
+    add_frame_mono_windowed_scalar(effective_start, frame, start_offset, effective_size);
+#endif
+}
+
+// 스칼라 윈도우 적용 버전
+void OLAAccumulator::add_frame_mono_windowed_scalar(int64_t effective_start, const float* frame,
+                                                   int start_offset, int effective_size) {
+    for (int t = 0; t < effective_size; ++t) {
+        int64_t sample_pos = effective_start + t;
+        size_t idx = ring_index(sample_pos);
+        int frame_idx = start_offset + t;
+
+        float x = frame[frame_idx] * gain_ * window_[frame_idx];
+        ring_accum_[idx] += x;
+    }
+}
+
+// SIMD 최적화된 윈도우 미적용 버전
+void OLAAccumulator::add_frame_mono_plain_simd(int64_t effective_start, const float* frame,
+                                               int start_offset, int effective_size) {
+#if SIMD_AVAILABLE && defined(_OPENMP)
+    const int simd_end = (effective_size / SIMD_WIDTH) * SIMD_WIDTH;
+
+    // SIMD 처리 가능한 구간
+    #pragma omp simd aligned(frame:32) safelen(SIMD_WIDTH)
+    for (int t = 0; t < simd_end; t += SIMD_WIDTH) {
+        // 벡터화된 처리를 위한 루프 언롤링
+        for (int i = 0; i < SIMD_WIDTH && (t + i) < effective_size; ++i) {
+            int64_t sample_pos = effective_start + t + i;
             size_t idx = ring_index(sample_pos);
-            int frame_idx = start_offset + t;
+            int frame_idx = start_offset + t + i;
 
             float x = frame[frame_idx] * gain_;
             ring_accum_[idx] += x;
         }
     }
+
+    // 나머지 처리 (스칼라)
+    for (int t = simd_end; t < effective_size; ++t) {
+        int64_t sample_pos = effective_start + t;
+        size_t idx = ring_index(sample_pos);
+        int frame_idx = start_offset + t;
+
+        float x = frame[frame_idx] * gain_;
+        ring_accum_[idx] += x;
+    }
+#else
+    // SIMD 미지원 시 스칼라 버전으로 폴백
+    add_frame_mono_plain_scalar(effective_start, frame, start_offset, effective_size);
+#endif
+}
+
+// 스칼라 윈도우 미적용 버전
+void OLAAccumulator::add_frame_mono_plain_scalar(int64_t effective_start, const float* frame,
+                                                 int start_offset, int effective_size) {
+    for (int t = 0; t < effective_size; ++t) {
+        int64_t sample_pos = effective_start + t;
+        size_t idx = ring_index(sample_pos);
+        int frame_idx = start_offset + t;
+
+        float x = frame[frame_idx] * gain_;
+        ring_accum_[idx] += x;
+    }
 }
 
 void OLAAccumulator::add_frame_multi(int64_t start_sample, const float* frame) {
+    // 피드백 반영: 다채널 SIMD 최적화
+
+    // 음수 시작 위치 처리
+    int start_offset = 0;
+    if (start_sample < 0) {
+        start_offset = static_cast<int>(-start_sample);
+        if (start_offset >= cfg_.frame_size) {
+            return; // 전체 프레임이 음수 범위
+        }
+    }
+
+    const int effective_size = cfg_.frame_size - start_offset;
+    const int64_t effective_start = start_sample + start_offset;
+
+    // SIMD 최적화 적용 조건 확인
+    const bool use_simd = (effective_size >= SIMD_WIDTH * 2) && SIMD_AVAILABLE;
+
     // 다채널 처리: SoA 레이아웃 (채널별 독립 처리)
     for (int c = 0; c < cfg_.channels; ++c) {
         size_t channel_offset = c * ring_len_;
 
-        for (int t = 0; t < cfg_.frame_size; ++t) {
-            int64_t sample_pos = start_sample + t;
-
-            // 음수 인덱스 처리 - 음수면 스킵
-            if (sample_pos < 0) {
-                continue;
+        if (cfg_.apply_window_inside && !window_.empty()) {
+            // 윈도우 적용 버전
+            if (use_simd) {
+                add_frame_multi_windowed_simd(effective_start, frame, start_offset,
+                                            effective_size, c, channel_offset);
+            } else {
+                add_frame_multi_windowed_scalar(effective_start, frame, start_offset,
+                                               effective_size, c, channel_offset);
             }
+        } else {
+            // 윈도우 미적용 버전
+            if (use_simd) {
+                add_frame_multi_plain_simd(effective_start, frame, start_offset,
+                                         effective_size, c, channel_offset);
+            } else {
+                add_frame_multi_plain_scalar(effective_start, frame, start_offset,
+                                           effective_size, c, channel_offset);
+            }
+        }
+    }
+}
 
+// SIMD 최적화된 다채널 윈도우 적용 버전
+void OLAAccumulator::add_frame_multi_windowed_simd(int64_t effective_start, const float* frame,
+                                                   int start_offset, int effective_size,
+                                                   int channel, size_t channel_offset) {
+#if SIMD_AVAILABLE && defined(_OPENMP)
+    const int simd_end = (effective_size / SIMD_WIDTH) * SIMD_WIDTH;
+
+    // SIMD 처리 가능한 구간
+    #pragma omp simd safelen(SIMD_WIDTH)
+    for (int t = 0; t < simd_end; t += SIMD_WIDTH) {
+        for (int i = 0; i < SIMD_WIDTH && (t + i) < effective_size; ++i) {
+            int64_t sample_pos = effective_start + t + i;
             size_t idx = ring_index(sample_pos);
-            float x = frame[t * cfg_.channels + c] * gain_;
+            int frame_idx = start_offset + t + i;
 
-            // 내부 윈도우 적용 (옵션)
-            if (cfg_.apply_window_inside && !window_.empty()) {
-                x *= window_[t];
-            }
-
+            float x = frame[frame_idx * cfg_.channels + channel] * gain_ * window_[frame_idx];
             ring_accum_[channel_offset + idx] += x;
         }
+    }
+
+    // 나머지 처리 (스칼라)
+    for (int t = simd_end; t < effective_size; ++t) {
+        int64_t sample_pos = effective_start + t;
+        size_t idx = ring_index(sample_pos);
+        int frame_idx = start_offset + t;
+
+        float x = frame[frame_idx * cfg_.channels + channel] * gain_ * window_[frame_idx];
+        ring_accum_[channel_offset + idx] += x;
+    }
+#else
+    add_frame_multi_windowed_scalar(effective_start, frame, start_offset,
+                                   effective_size, channel, channel_offset);
+#endif
+}
+
+// 스칼라 다채널 윈도우 적용 버전
+void OLAAccumulator::add_frame_multi_windowed_scalar(int64_t effective_start, const float* frame,
+                                                     int start_offset, int effective_size,
+                                                     int channel, size_t channel_offset) {
+    for (int t = 0; t < effective_size; ++t) {
+        int64_t sample_pos = effective_start + t;
+        size_t idx = ring_index(sample_pos);
+        int frame_idx = start_offset + t;
+
+        float x = frame[frame_idx * cfg_.channels + channel] * gain_ * window_[frame_idx];
+        ring_accum_[channel_offset + idx] += x;
+    }
+}
+
+// SIMD 최적화된 다채널 윈도우 미적용 버전
+void OLAAccumulator::add_frame_multi_plain_simd(int64_t effective_start, const float* frame,
+                                                int start_offset, int effective_size,
+                                                int channel, size_t channel_offset) {
+#if SIMD_AVAILABLE && defined(_OPENMP)
+    const int simd_end = (effective_size / SIMD_WIDTH) * SIMD_WIDTH;
+
+    // SIMD 처리 가능한 구간
+    #pragma omp simd safelen(SIMD_WIDTH)
+    for (int t = 0; t < simd_end; t += SIMD_WIDTH) {
+        for (int i = 0; i < SIMD_WIDTH && (t + i) < effective_size; ++i) {
+            int64_t sample_pos = effective_start + t + i;
+            size_t idx = ring_index(sample_pos);
+            int frame_idx = start_offset + t + i;
+
+            float x = frame[frame_idx * cfg_.channels + channel] * gain_;
+            ring_accum_[channel_offset + idx] += x;
+        }
+    }
+
+    // 나머지 처리 (스칼라)
+    for (int t = simd_end; t < effective_size; ++t) {
+        int64_t sample_pos = effective_start + t;
+        size_t idx = ring_index(sample_pos);
+        int frame_idx = start_offset + t;
+
+        float x = frame[frame_idx * cfg_.channels + channel] * gain_;
+        ring_accum_[channel_offset + idx] += x;
+    }
+#else
+    add_frame_multi_plain_scalar(effective_start, frame, start_offset,
+                                effective_size, channel, channel_offset);
+#endif
+}
+
+// 스칼라 다채널 윈도우 미적용 버전
+void OLAAccumulator::add_frame_multi_plain_scalar(int64_t effective_start, const float* frame,
+                                                  int start_offset, int effective_size,
+                                                  int channel, size_t channel_offset) {
+    for (int t = 0; t < effective_size; ++t) {
+        int64_t sample_pos = effective_start + t;
+        size_t idx = ring_index(sample_pos);
+        int frame_idx = start_offset + t;
+
+        float x = frame[frame_idx * cfg_.channels + channel] * gain_;
+        ring_accum_[channel_offset + idx] += x;
     }
 }
 
@@ -261,49 +493,136 @@ void OLAAccumulator::update_peak_meter(const float* data, int num_samples) {
 }
 
 void OLAAccumulator::normalize_and_clear(float* dst, int num_samples, int64_t start_idx) {
+    // 피드백 반영: normalize_and_clear SIMD 최적화
     const float eps = 1e-8f;
 
     if (cfg_.channels == 1) {
-        // Phase 3: 단일 채널 SIMD 최적화 준비
-        // TODO: 향후 벡터화 - 정규화와 소거를 분리하여 메모리 접근 최적화
+        // 단일 채널 SIMD 최적화
+        normalize_and_clear_mono_simd(dst, num_samples, start_idx, eps);
+    } else {
+        // 다채널 SIMD 최적화
+        normalize_and_clear_multi_simd(dst, num_samples, start_idx, eps);
+    }
+}
 
-        // 범위 체크를 먼저 수행하여 유효한 구간만 처리
-        int valid_start = 0;
-        int valid_end = num_samples;
+// SIMD 최적화된 단일 채널 정규화 및 소거
+void OLAAccumulator::normalize_and_clear_mono_simd(float* dst, int num_samples,
+                                                   int64_t start_idx, float eps) {
+    // 범위 체크를 먼저 수행하여 유효한 구간만 처리
+    int valid_start = 0;
+    int valid_end = num_samples;
 
-        // 앞쪽 무효 구간 처리
-        while (valid_start < num_samples && (start_idx + valid_start < 0 || start_idx + valid_start >= produced_samples_)) {
-            dst[valid_start] = 0.0f;
-            valid_start++;
+    // 앞쪽 무효 구간 처리
+    while (valid_start < num_samples &&
+           (start_idx + valid_start < 0 || start_idx + valid_start >= produced_samples_)) {
+        dst[valid_start] = 0.0f;
+        valid_start++;
+    }
+
+    // 뒤쪽 무효 구간 찾기
+    while (valid_end > valid_start &&
+           (start_idx + valid_end - 1 < 0 || start_idx + valid_end - 1 >= produced_samples_)) {
+        dst[valid_end - 1] = 0.0f;
+        valid_end--;
+    }
+
+    const int valid_size = valid_end - valid_start;
+    const bool use_simd = (valid_size >= SIMD_WIDTH * 2) && SIMD_AVAILABLE;
+
+    if (use_simd) {
+#if SIMD_AVAILABLE && defined(_OPENMP)
+        const int simd_end = valid_start + (valid_size / SIMD_WIDTH) * SIMD_WIDTH;
+
+        // SIMD 처리 가능한 구간 - 정규화와 소거를 분리하여 메모리 접근 최적화
+        #pragma omp simd aligned(dst:32) safelen(SIMD_WIDTH)
+        for (int i = valid_start; i < simd_end; i += SIMD_WIDTH) {
+            for (int j = 0; j < SIMD_WIDTH && (i + j) < valid_end; ++j) {
+                int64_t sample_pos = start_idx + i + j;
+                size_t idx = ring_index(sample_pos);
+
+                // COLA 정규화 적용
+                float norm = std::max(eps, norm_buffer_[idx]);
+                dst[i + j] = ring_accum_[idx] / norm;
+            }
         }
 
-        // 뒤쪽 무효 구간 찾기
-        while (valid_end > valid_start && (start_idx + valid_end - 1 < 0 || start_idx + valid_end - 1 >= produced_samples_)) {
-            dst[valid_end - 1] = 0.0f;
-            valid_end--;
+        // 버퍼 소거를 별도 루프로 분리 (메모리 접근 최적화)
+        #pragma omp simd safelen(SIMD_WIDTH)
+        for (int i = valid_start; i < simd_end; i += SIMD_WIDTH) {
+            for (int j = 0; j < SIMD_WIDTH && (i + j) < valid_end; ++j) {
+                int64_t sample_pos = start_idx + i + j;
+                size_t idx = ring_index(sample_pos);
+                ring_accum_[idx] = 0.0f;
+            }
         }
 
-        // 유효 구간 벡터화 가능한 처리 (향후 SIMD 최적화 대상)
+        // 나머지 처리 (스칼라)
+        for (int i = simd_end; i < valid_end; ++i) {
+            int64_t sample_pos = start_idx + i;
+            size_t idx = ring_index(sample_pos);
+
+            float norm = std::max(eps, norm_buffer_[idx]);
+            dst[i] = ring_accum_[idx] / norm;
+            ring_accum_[idx] = 0.0f;
+        }
+#endif
+    } else {
+        // 스칼라 처리
         for (int i = valid_start; i < valid_end; ++i) {
             int64_t sample_pos = start_idx + i;
             size_t idx = ring_index(sample_pos);
 
-            // COLA 정규화 적용 (벡터화 가능)
             float norm = std::max(eps, norm_buffer_[idx]);
             dst[i] = ring_accum_[idx] / norm;
-
-            // 버퍼 소거 (별도 루프로 분리 가능)
             ring_accum_[idx] = 0.0f;
         }
-    } else {
-        // Phase 3: 다채널 SoA → interleaved 변환 최적화 준비
-        // TODO: 향후 채널별 벡터화 및 인터리빙 최적화
+    }
+}
 
-        for (int i = 0; i < num_samples; ++i) {
+// SIMD 최적화된 다채널 정규화 및 소거
+void OLAAccumulator::normalize_and_clear_multi_simd(float* dst, int num_samples,
+                                                    int64_t start_idx, float eps) {
+    const bool use_simd = (num_samples >= SIMD_WIDTH * 2) && SIMD_AVAILABLE;
+
+    if (use_simd) {
+#if SIMD_AVAILABLE && defined(_OPENMP)
+        const int simd_end = (num_samples / SIMD_WIDTH) * SIMD_WIDTH;
+
+        // SIMD 처리 가능한 구간
+        #pragma omp simd aligned(dst:32) safelen(SIMD_WIDTH)
+        for (int i = 0; i < simd_end; i += SIMD_WIDTH) {
+            for (int j = 0; j < SIMD_WIDTH && (i + j) < num_samples; ++j) {
+                int sample_idx = i + j;
+                int64_t sample_pos = start_idx + sample_idx;
+
+                if (sample_pos < 0 || sample_pos >= produced_samples_) {
+                    // 무효 샘플 처리
+                    for (int c = 0; c < cfg_.channels; ++c) {
+                        dst[sample_idx * cfg_.channels + c] = 0.0f;
+                    }
+                    continue;
+                }
+
+                size_t idx = ring_index(sample_pos);
+                float norm = std::max(eps, norm_buffer_[idx]);
+
+                // 채널별 처리
+                for (int c = 0; c < cfg_.channels; ++c) {
+                    size_t channel_offset = c * ring_len_;
+                    size_t src_idx = channel_offset + idx;
+                    size_t dst_idx = sample_idx * cfg_.channels + c;
+
+                    dst[dst_idx] = ring_accum_[src_idx] / norm;
+                    ring_accum_[src_idx] = 0.0f;
+                }
+            }
+        }
+
+        // 나머지 처리 (스칼라)
+        for (int i = simd_end; i < num_samples; ++i) {
             int64_t sample_pos = start_idx + i;
 
             if (sample_pos < 0 || sample_pos >= produced_samples_) {
-                // 무효 샘플 처리 (벡터화 가능)
                 for (int c = 0; c < cfg_.channels; ++c) {
                     dst[i * cfg_.channels + c] = 0.0f;
                 }
@@ -313,16 +632,37 @@ void OLAAccumulator::normalize_and_clear(float* dst, int num_samples, int64_t st
             size_t idx = ring_index(sample_pos);
             float norm = std::max(eps, norm_buffer_[idx]);
 
-            // 채널별 처리 (향후 SIMD 최적화 대상)
             for (int c = 0; c < cfg_.channels; ++c) {
                 size_t channel_offset = c * ring_len_;
                 size_t src_idx = channel_offset + idx;
                 size_t dst_idx = i * cfg_.channels + c;
 
-                // COLA 정규화 적용
                 dst[dst_idx] = ring_accum_[src_idx] / norm;
+                ring_accum_[src_idx] = 0.0f;
+            }
+        }
+#endif
+    } else {
+        // 스칼라 처리
+        for (int i = 0; i < num_samples; ++i) {
+            int64_t sample_pos = start_idx + i;
 
-                // 버퍼 소거
+            if (sample_pos < 0 || sample_pos >= produced_samples_) {
+                for (int c = 0; c < cfg_.channels; ++c) {
+                    dst[i * cfg_.channels + c] = 0.0f;
+                }
+                continue;
+            }
+
+            size_t idx = ring_index(sample_pos);
+            float norm = std::max(eps, norm_buffer_[idx]);
+
+            for (int c = 0; c < cfg_.channels; ++c) {
+                size_t channel_offset = c * ring_len_;
+                size_t src_idx = channel_offset + idx;
+                size_t dst_idx = i * cfg_.channels + c;
+
+                dst[dst_idx] = ring_accum_[src_idx] / norm;
                 ring_accum_[src_idx] = 0.0f;
             }
         }

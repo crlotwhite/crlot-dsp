@@ -39,9 +39,13 @@ WindowData& WindowData::operator=(WindowData&& other) noexcept {
     return *this;
 }
 
-// 정적 멤버 초기화
+// 정적 멤버 초기화 (개선된 안전성)
 std::mutex WindowLUT::cache_mutex_;
-std::unordered_map<uint64_t, std::unique_ptr<WindowData>> WindowLUT::cache_;
+std::unordered_map<uint64_t, WindowLUT::SafeCacheEntry> WindowLUT::safe_cache_;
+std::atomic<uint64_t> WindowLUT::current_generation_{1};
+
+// 하위 호환성을 위한 기존 캐시
+std::unordered_map<uint64_t, std::unique_ptr<WindowData>> WindowLUT::legacy_cache_;
 
 // WindowLUT 구현
 WindowLUT::WindowLUT(size_t nfft, WindowType type, bool periodic, NormalizationType norm) {
@@ -68,6 +72,38 @@ WindowLUT& WindowLUT::getInstance() {
     return instance;
 }
 
+std::shared_ptr<const float> WindowLUT::GetWindowSafe(WindowType type, size_t N, bool periodic,
+                                                     NormalizationType norm) {
+    if (N == 0) {
+        throw std::invalid_argument("Window size must be greater than 0");
+    }
+
+    uint64_t key = makeCacheKeyExtended(type, N, periodic, norm);
+    uint64_t current_gen = current_generation_.load();
+
+    // 전체 과정을 하나의 락으로 보호하여 경쟁 조건 방지
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+
+    // 캐시에서 검색 (현재 generation과 일치하는 것만)
+    auto it = safe_cache_.find(key);
+    if (it != safe_cache_.end() && it->second.generation == current_gen) {
+        // 캐시 히트: shared_ptr로 안전한 참조 반환
+        // The following aliasing constructor creates a shared_ptr<const float> that shares ownership with the WindowData object
+        // but points directly to the underlying data array. This ensures the data remains valid as long as the WindowData is alive.
+                return std::shared_ptr<const float>(it->second.data, it->second.data->data);
+    }
+
+    // 캐시 미스 또는 구세대 데이터: 새로 생성
+    auto window_data = createWindow(type, N, periodic, norm);
+    auto shared_data = std::shared_ptr<WindowData>(window_data.release());
+
+    // 안전한 캐시에 저장
+    safe_cache_[key] = SafeCacheEntry(shared_data, current_gen);
+
+    // shared_ptr<const float> 반환 (WindowData의 data 멤버를 가리킴)
+    return std::shared_ptr<const float>(shared_data, shared_data->data);
+}
+
 const float* WindowLUT::GetWindow(WindowType type, size_t N, bool periodic,
                                  NormalizationType norm) {
     if (N == 0) {
@@ -79,9 +115,9 @@ const float* WindowLUT::GetWindow(WindowType type, size_t N, bool periodic,
     // 전체 과정을 하나의 락으로 보호하여 경쟁 조건 방지
     std::lock_guard<std::mutex> lock(cache_mutex_);
 
-    // 캐시에서 검색
-    auto it = cache_.find(key);
-    if (it != cache_.end()) {
+    // 레거시 캐시에서 검색
+    auto it = legacy_cache_.find(key);
+    if (it != legacy_cache_.end()) {
         return it->second->data;
     }
 
@@ -89,20 +125,46 @@ const float* WindowLUT::GetWindow(WindowType type, size_t N, bool periodic,
     auto window_data = createWindow(type, N, periodic, norm);
     const float* result = window_data->data;
 
-    // 캐시에 저장
-    cache_[key] = std::move(window_data);
+    // 레거시 캐시에 저장
+    legacy_cache_[key] = std::move(window_data);
 
     return result;
 }
 
 size_t WindowLUT::getCacheSize() const {
     std::lock_guard<std::mutex> lock(cache_mutex_);
-    return cache_.size();
+    return safe_cache_.size() + legacy_cache_.size();
 }
 
-void WindowLUT::clearCache() {
+void WindowLUT::clearCache(bool force_immediate) {
     std::lock_guard<std::mutex> lock(cache_mutex_);
-    cache_.clear();
+
+    if (force_immediate) {
+        // 즉시 메모리 해제 (테스트용)
+        safe_cache_.clear();
+        legacy_cache_.clear();
+    } else {
+        // Generation 기반 무효화 (안전한 방식)
+        current_generation_.fetch_add(1);
+
+        // 구세대 엔트리들을 정리 (선택적)
+        uint64_t current_gen = current_generation_.load();
+        auto it = safe_cache_.begin();
+        while (it != safe_cache_.end()) {
+            if (it->second.generation < current_gen - 1) {  // 2세대 이전 데이터 정리
+                it = safe_cache_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        // 레거시 캐시는 즉시 정리 (하위 호환성 위험 있음)
+        legacy_cache_.clear();
+    }
+}
+
+uint64_t WindowLUT::getCurrentGeneration() const {
+    return current_generation_.load();
 }
 
 double WindowLUT::calculateSum(const float* window, size_t N) {

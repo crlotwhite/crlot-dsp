@@ -17,9 +17,9 @@ struct FftPlanDesc {
   FftDomain domain;  // FFT 타입
   int nfft;          // FFT 크기 (샘플 수)
   bool in_place;     // 제자리 연산 여부 (현재 미지원, 향후 확장)
-  int batch;         // 배치 크기 (현재 1로 제한)
-  int stride_in;     // 입력 스트라이드 (현재 1로 제한)
-  int stride_out;    // 출력 스트라이드 (현재 1로 제한)
+  int batch;         // 배치 크기 (1 이상, 피드백 반영: 배치 지원)
+  int stride_in;     // 입력 스트라이드 (배치 처리용)
+  int stride_out;    // 출력 스트라이드 (배치 처리용)
 };
 
 // FFT 플랜 인터페이스
@@ -43,7 +43,8 @@ public:
   // 플랜 정보 조회
   virtual FftDomain domain() const = 0;
   virtual int size() const = 0;
-  virtual bool supports_batch() const { return false; }  // 기본적으로 배치 미지원
+  virtual bool supports_batch() const { return true; }   // 피드백 반영: 배치 지원
+  virtual int max_batch_size() const { return 16; }      // 최대 배치 크기
 };
 
 // FFT 플랜 팩토리 함수

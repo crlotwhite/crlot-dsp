@@ -207,6 +207,76 @@ private:
      * 정규화 적용 및 버퍼 소거
      */
     void normalize_and_clear(float* dst, int num_samples, int64_t start_idx);
+
+    // === SIMD 최적화된 내부 함수들 ===
+
+    /**
+     * SIMD 최적화된 단일 채널 프레임 누산 (윈도우 적용)
+     */
+    void add_frame_mono_windowed_simd(int64_t effective_start, const float* frame,
+                                     int start_offset, int effective_size);
+
+    /**
+     * 스칼라 단일 채널 프레임 누산 (윈도우 적용)
+     */
+    void add_frame_mono_windowed_scalar(int64_t effective_start, const float* frame,
+                                       int start_offset, int effective_size);
+
+    /**
+     * SIMD 최적화된 단일 채널 프레임 누산 (윈도우 미적용)
+     */
+    void add_frame_mono_plain_simd(int64_t effective_start, const float* frame,
+                                  int start_offset, int effective_size);
+
+    /**
+     * 스칼라 단일 채널 프레임 누산 (윈도우 미적용)
+     */
+    void add_frame_mono_plain_scalar(int64_t effective_start, const float* frame,
+                                    int start_offset, int effective_size);
+
+    // === 다채널 SIMD 최적화된 내부 함수들 ===
+
+    /**
+     * SIMD 최적화된 다채널 프레임 누산 (윈도우 적용)
+     */
+    void add_frame_multi_windowed_simd(int64_t effective_start, const float* frame,
+                                      int start_offset, int effective_size,
+                                      int channel, size_t channel_offset);
+
+    /**
+     * 스칼라 다채널 프레임 누산 (윈도우 적용)
+     */
+    void add_frame_multi_windowed_scalar(int64_t effective_start, const float* frame,
+                                        int start_offset, int effective_size,
+                                        int channel, size_t channel_offset);
+
+    /**
+     * SIMD 최적화된 다채널 프레임 누산 (윈도우 미적용)
+     */
+    void add_frame_multi_plain_simd(int64_t effective_start, const float* frame,
+                                   int start_offset, int effective_size,
+                                   int channel, size_t channel_offset);
+
+    /**
+     * 스칼라 다채널 프레임 누산 (윈도우 미적용)
+     */
+    void add_frame_multi_plain_scalar(int64_t effective_start, const float* frame,
+                                     int start_offset, int effective_size,
+                                     int channel, size_t channel_offset);
+
+    // === 정규화 및 소거 SIMD 최적화된 내부 함수들 ===
+
+    /**
+     * SIMD 최적화된 단일 채널 정규화 및 소거
+     */
+    void normalize_and_clear_mono_simd(float* dst, int num_samples,
+                                      int64_t start_idx, float eps);
+
+    /**
+     * SIMD 최적화된 다채널 정규화 및 소거
+     */
+    void normalize_and_clear_multi_simd(float* dst, int num_samples,
+                                       int64_t start_idx, float eps);
 };
 
 } // namespace dsp

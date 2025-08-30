@@ -100,6 +100,22 @@ cc_test(
 )
 
 cc_test(
+    name = "performance_benchmark",
+    size = "medium",
+    srcs = ["performance_benchmark.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:ola_accumulator",
+        "//dsp:window_lut",
+        "//dsp:frame_queue",
+        "//dsp/fft:fft",
+    ],
+    copts = ["-std=c++17", "-O3", "-DNDEBUG"],  # 성능 최적화 플래그
+    tags = ["benchmark"],  # 벤치마크 태그
+)
+
+cc_test(
     name = "fft_test",
     size = "small",
     srcs = ["fft_test.cc"],
