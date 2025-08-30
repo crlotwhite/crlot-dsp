@@ -187,23 +187,43 @@ void OLAAccumulator::initialize_normalization() {
 }
 
 void OLAAccumulator::add_frame_mono(int64_t start_sample, const float* frame) {
-    for (int t = 0; t < cfg_.frame_size; ++t) {
-        int64_t sample_pos = start_sample + t;
+    // Phase 3: SIMD 최적화 준비 - 벡터화 친화적 루프 구조
+    // TODO: 향후 #pragma omp simd 또는 AVX2 intrinsics 적용 가능
 
-        // 음수 인덱스 처리 - 음수면 스킵
-        if (sample_pos < 0) {
-            continue;
+    // 음수 시작 위치 처리를 위한 오프셋 계산
+    int start_offset = 0;
+    if (start_sample < 0) {
+        start_offset = static_cast<int>(-start_sample);
+        if (start_offset >= cfg_.frame_size) {
+            return; // 전체 프레임이 음수 범위
         }
+    }
 
-        size_t idx = ring_index(sample_pos);
-        float x = frame[t] * gain_;
+    // 벡터화 가능한 메인 루프
+    const int effective_size = cfg_.frame_size - start_offset;
+    const int64_t effective_start = start_sample + start_offset;
 
-        // 내부 윈도우 적용 (옵션)
-        if (cfg_.apply_window_inside && !window_.empty()) {
-            x *= window_[t];
+    // 윈도우 적용 여부에 따른 분기 (브랜치 예측 최적화)
+    if (cfg_.apply_window_inside && !window_.empty()) {
+        // 윈도우 적용 버전 (향후 SIMD 최적화 대상)
+        for (int t = 0; t < effective_size; ++t) {
+            int64_t sample_pos = effective_start + t;
+            size_t idx = ring_index(sample_pos);
+            int frame_idx = start_offset + t;
+
+            float x = frame[frame_idx] * gain_ * window_[frame_idx];
+            ring_accum_[idx] += x;
         }
+    } else {
+        // 윈도우 미적용 버전 (향후 SIMD 최적화 대상)
+        for (int t = 0; t < effective_size; ++t) {
+            int64_t sample_pos = effective_start + t;
+            size_t idx = ring_index(sample_pos);
+            int frame_idx = start_offset + t;
 
-        ring_accum_[idx] += x;
+            float x = frame[frame_idx] * gain_;
+            ring_accum_[idx] += x;
+        }
     }
 }
 
@@ -244,31 +264,46 @@ void OLAAccumulator::normalize_and_clear(float* dst, int num_samples, int64_t st
     const float eps = 1e-8f;
 
     if (cfg_.channels == 1) {
-        // 단일 채널 처리
-        for (int i = 0; i < num_samples; ++i) {
+        // Phase 3: 단일 채널 SIMD 최적화 준비
+        // TODO: 향후 벡터화 - 정규화와 소거를 분리하여 메모리 접근 최적화
+
+        // 범위 체크를 먼저 수행하여 유효한 구간만 처리
+        int valid_start = 0;
+        int valid_end = num_samples;
+
+        // 앞쪽 무효 구간 처리
+        while (valid_start < num_samples && (start_idx + valid_start < 0 || start_idx + valid_start >= produced_samples_)) {
+            dst[valid_start] = 0.0f;
+            valid_start++;
+        }
+
+        // 뒤쪽 무효 구간 찾기
+        while (valid_end > valid_start && (start_idx + valid_end - 1 < 0 || start_idx + valid_end - 1 >= produced_samples_)) {
+            dst[valid_end - 1] = 0.0f;
+            valid_end--;
+        }
+
+        // 유효 구간 벡터화 가능한 처리 (향후 SIMD 최적화 대상)
+        for (int i = valid_start; i < valid_end; ++i) {
             int64_t sample_pos = start_idx + i;
-
-            // 범위 밖 처리
-            if (sample_pos < 0 || sample_pos >= produced_samples_) {
-                dst[i] = 0.0f;
-                continue;
-            }
-
             size_t idx = ring_index(sample_pos);
 
-            // COLA 정규화 적용
+            // COLA 정규화 적용 (벡터화 가능)
             float norm = std::max(eps, norm_buffer_[idx]);
             dst[i] = ring_accum_[idx] / norm;
 
-            // 버퍼 소거 (다음 사용을 위해)
+            // 버퍼 소거 (별도 루프로 분리 가능)
             ring_accum_[idx] = 0.0f;
         }
     } else {
-        // 다채널 처리: SoA → interleaved 변환
+        // Phase 3: 다채널 SoA → interleaved 변환 최적화 준비
+        // TODO: 향후 채널별 벡터화 및 인터리빙 최적화
+
         for (int i = 0; i < num_samples; ++i) {
             int64_t sample_pos = start_idx + i;
 
             if (sample_pos < 0 || sample_pos >= produced_samples_) {
+                // 무효 샘플 처리 (벡터화 가능)
                 for (int c = 0; c < cfg_.channels; ++c) {
                     dst[i * cfg_.channels + c] = 0.0f;
                 }
@@ -278,6 +313,7 @@ void OLAAccumulator::normalize_and_clear(float* dst, int num_samples, int64_t st
             size_t idx = ring_index(sample_pos);
             float norm = std::max(eps, norm_buffer_[idx]);
 
+            // 채널별 처리 (향후 SIMD 최적화 대상)
             for (int c = 0; c < cfg_.channels; ++c) {
                 size_t channel_offset = c * ring_len_;
                 size_t src_idx = channel_offset + idx;
