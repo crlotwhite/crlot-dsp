@@ -197,19 +197,62 @@ TEST_F(FftTest, NaNAndDenormalHandling) {
 }
 
 TEST_F(FftTest, InvalidConfiguration) {
-  // 홀수 NFFT는 실패해야 함
+  // Real 도메인: 홀수 NFFT는 실패해야 함
   desc.nfft = 513;
+  desc.domain = FftDomain::Real;
   EXPECT_THROW(MakeFftPlan(desc), std::runtime_error);
 
-  // Complex 도메인은 실패해야 함
+  // Phase 3: Complex 도메인은 이제 지원됨 (홀수 크기도 허용)
   desc.nfft = 512;
   desc.domain = FftDomain::Complex;
-  EXPECT_THROW(MakeFftPlan(desc), std::runtime_error);
+  EXPECT_NO_THROW(MakeFftPlan(desc));
 
-  // Batch > 1은 실패해야 함
+  // Complex 도메인에서 홀수 크기도 허용
+  desc.nfft = 513;
+  desc.domain = FftDomain::Complex;
+  EXPECT_NO_THROW(MakeFftPlan(desc));
+
+  // Batch > 1은 여전히 실패해야 함
   desc.domain = FftDomain::Real;
+  desc.nfft = 512;
   desc.batch = 2;
   EXPECT_THROW(MakeFftPlan(desc), std::runtime_error);
+}
+
+// Phase 3: Complex FFT 기본 테스트 추가
+TEST_F(FftTest, ComplexFFTBasic) {
+  desc.nfft = 256;
+  desc.domain = FftDomain::Complex;
+  auto plan = MakeFftPlan(desc);
+
+  // 복소 입력 생성 (실수부만 사용)
+  std::vector<std::complex<float>> input(256);
+  std::vector<std::complex<float>> fft_output(256);
+  std::vector<std::complex<float>> ifft_output(256);
+
+  // 단순한 복소 신호 생성
+  for (int i = 0; i < 256; ++i) {
+    float t = static_cast<float>(i) / 256.0f;
+    input[i] = std::complex<float>(std::cos(2.0f * M_PI * 10.0f * t),
+                                   std::sin(2.0f * M_PI * 10.0f * t));
+  }
+
+  // Complex FFT 실행
+  EXPECT_NO_THROW(plan->forward_complex(input.data(), fft_output.data()));
+  EXPECT_NO_THROW(plan->inverse_complex(fft_output.data(), ifft_output.data()));
+
+  // 라운드트립 오차 검증
+  float max_error = 0.0f;
+  for (int i = 0; i < 256; ++i) {
+    float real_error = std::abs(ifft_output[i].real() - input[i].real());
+    float imag_error = std::abs(ifft_output[i].imag() - input[i].imag());
+    max_error = std::max(max_error, std::max(real_error, imag_error));
+  }
+
+  EXPECT_LT(max_error, 1e-5f) << "Complex FFT roundtrip error too large: " << max_error;
+
+  // 메트릭 로깅
+  std::cout << "Complex FFT Metrics - Max Error: " << max_error << std::endl;
 }
 
 }  // namespace

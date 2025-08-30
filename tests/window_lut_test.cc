@@ -283,18 +283,74 @@ TEST_F(WindowLUTTest, ThreadSafety) {
     }
 }
 
-// 메모리 정렬 테스트
+// 메모리 정렬 테스트 (평가 피드백 반영: 32B 정렬)
 TEST_F(WindowLUTTest, MemoryAlignment) {
     auto& lut = WindowLUT::getInstance();
 
-    std::vector<size_t> sizes = {64, 128, 256, 512, 1024};
+    std::vector<size_t> sizes = {64, 128, 256, 512, 1024, 2048, 4096};
 
     for (size_t N : sizes) {
         const float* window = lut.GetWindow(WindowType::HANN, N);
 
-        // 16-byte 정렬 확인 (PR2 요구사항)
+        // 32-byte 정렬 확인 (AVX2/NEON 벡터화 지원)
         uintptr_t addr = reinterpret_cast<uintptr_t>(window);
-        EXPECT_EQ(addr % 16, 0) << "Window data not 16-byte aligned for N=" << N;
+        EXPECT_EQ(addr % 32, 0) << "Window data not 32-byte aligned for N=" << N;
+
+        // 성능 메트릭 로깅
+        std::cout << "Alignment check - N=" << N
+                  << ", addr=0x" << std::hex << addr << std::dec
+                  << ", aligned=" << (addr % 32 == 0 ? "YES" : "NO") << std::endl;
+    }
+}
+
+// 다양한 윈도우 타입의 정렬 보장 테스트
+TEST_F(WindowLUTTest, AlignmentGuaranteeAllTypes) {
+    auto& lut = WindowLUT::getInstance();
+
+    std::vector<WindowType> types = {
+        WindowType::HANN,
+        WindowType::HAMMING,
+        WindowType::BLACKMAN,
+        WindowType::RECT
+    };
+
+    std::vector<size_t> sizes = {256, 512, 1024, 2048};
+
+    for (auto type : types) {
+        for (size_t N : sizes) {
+            const float* window = lut.GetWindow(type, N);
+            ASSERT_NE(window, nullptr) << "Window creation failed for type="
+                                       << static_cast<int>(type) << ", N=" << N;
+
+            // 32B 정렬 보장
+            uintptr_t addr = reinterpret_cast<uintptr_t>(window);
+            EXPECT_EQ(addr % 32, 0) << "32-byte alignment violation for type="
+                                    << static_cast<int>(type) << ", N=" << N;
+        }
+    }
+}
+
+// 정렬 성능 및 반복 생성/파괴 테스트
+TEST_F(WindowLUTTest, AlignmentStressTest) {
+    auto& lut = WindowLUT::getInstance();
+
+    // 반복적으로 윈도우 생성/파괴하여 메모리 누수 및 정렬 일관성 확인
+    for (int iteration = 0; iteration < 10; ++iteration) {
+        lut.clearCache();
+
+        std::vector<size_t> test_sizes = {128, 256, 512, 1024, 2048};
+        for (size_t N : test_sizes) {
+            const float* window = lut.GetWindow(WindowType::HANN, N);
+
+            // 정렬 확인
+            uintptr_t addr = reinterpret_cast<uintptr_t>(window);
+            EXPECT_EQ(addr % 32, 0) << "Alignment failure in iteration " << iteration
+                                    << " for N=" << N;
+        }
+
+        // 캐시 크기 확인
+        EXPECT_EQ(lut.getCacheSize(), test_sizes.size())
+            << "Cache size mismatch in iteration " << iteration;
     }
 }
 

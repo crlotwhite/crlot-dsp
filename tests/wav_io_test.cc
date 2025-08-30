@@ -211,7 +211,7 @@ TEST_F(WavIOTest, WavReader_SeekAndRead) {
     reader.close();
 }
 
-// 통합 테스트: Writer로 만든 파일을 Reader로 읽기
+// 통합 테스트: Writer로 만든 파일을 Reader로 읽기 (평가 피드백: 메트릭 로깅 강화)
 TEST_F(WavIOTest, Integration_WriteReadRoundTrip) {
     fs::path test_file = test_dir_ / "roundtrip.wav";
 
@@ -249,10 +249,44 @@ TEST_F(WavIOTest, Integration_WriteReadRoundTrip) {
         std::vector<float> read_data = reader.read_all();
         EXPECT_EQ(read_data.size(), original_data.size());
 
+        // 평가 피드백: RMSE, SNR(dB) 메트릭 로깅 추가
+        double sum_squared_error = 0.0;
+        double sum_squared_signal = 0.0;
+        double max_error = 0.0;
+
+        for (size_t i = 0; i < read_data.size(); ++i) {
+            double error = read_data[i] - original_data[i];
+            double signal = original_data[i];
+
+            sum_squared_error += error * error;
+            sum_squared_signal += signal * signal;
+            max_error = std::max(max_error, std::abs(error));
+        }
+
+        // RMSE 계산
+        double rmse = std::sqrt(sum_squared_error / read_data.size());
+
+        // SNR 계산 (dB)
+        double snr_db = -200.0;  // 기본값 (매우 낮은 SNR)
+        if (sum_squared_error > 0.0 && sum_squared_signal > 0.0) {
+            snr_db = 10.0 * std::log10(sum_squared_signal / sum_squared_error);
+        }
+
+        // 메트릭 로깅 (평가 피드백 반영)
+        std::cout << "WAV I/O Roundtrip Metrics:" << std::endl;
+        std::cout << "  RMSE: " << rmse << std::endl;
+        std::cout << "  SNR: " << snr_db << " dB" << std::endl;
+        std::cout << "  Max Error: " << max_error << std::endl;
+        std::cout << "  Format: 16-bit, " << channels << "ch, 48kHz" << std::endl;
+
         // 데이터 비교 (16비트 정밀도 고려)
         for (size_t i = 0; i < read_data.size(); ++i) {
             EXPECT_NEAR(read_data[i], original_data[i], 0.001f);
         }
+
+        // 품질 기준 검증 (16비트 기준)
+        EXPECT_LT(rmse, 0.001) << "RMSE too high: " << rmse;
+        EXPECT_GT(snr_db, 60.0) << "SNR too low: " << snr_db << " dB";
 
         reader.close();
     }
