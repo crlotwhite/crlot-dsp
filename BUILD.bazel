@@ -1,0 +1,9 @@
+cc_binary(
+    name = "debug_ola",
+    srcs = ["debug_ola.cc"],
+    deps = [
+        "//dsp:ola_accumulator",
+        "//dsp:window_lut",
+    ],
+    copts = ["-std=c++17"],
+)

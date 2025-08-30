@@ -71,3 +71,30 @@ cc_test(
     ],
     copts = ["-std=c++17"],
 )
+
+cc_test(
+    name = "ola_performance_test",
+    size = "small",
+    srcs = ["ola_performance_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:ola_accumulator",
+        "//dsp:window_lut",
+    ],
+    copts = ["-std=c++17"],
+)
+
+cc_test(
+    name = "ola_accumulator_test",
+    size = "small",
+    srcs = ["ola_accumulator_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:ola_accumulator",
+        "//dsp:frame_queue",
+        "//dsp:window_lut",
+    ],
+    copts = ["-std=c++17"],
+)

@@ -25,3 +25,12 @@ cc_library(
     deps = [],
     copts = ["-std=c++17"],
 )
+
+cc_library(
+    name = "ola_accumulator",
+    srcs = ["ola/OLAAccumulator.cc"],
+    hdrs = ["ola/OLAAccumulator.h"],
+    visibility = ["//visibility:public"],
+    deps = [],
+    copts = ["-std=c++17"],
+)
