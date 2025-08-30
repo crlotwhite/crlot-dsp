@@ -292,6 +292,36 @@ void WindowLUT::applyNormalization(float* data, size_t N, NormalizationType norm
             }
             break;
         }
+
+        case NormalizationType::OLA_SUM_WSQ: {
+            // 분석창이 이미 곱해진 프레임용 정규화
+            // ∑ w_s(t-kH)·w_a(t-kH) 형태의 정규화
+            // hop_size가 제공되지 않으면 L2 정규화로 폴백
+            if (hop_size > 0) {
+                // hop 기반 중첩 정규화 (향후 확장 가능)
+                // 현재는 제곱합 기반으로 구현
+                double sum_sq = calculateSumOfSquares(data, N);
+                if (sum_sq > 0.0) {
+                    // hop 비율을 고려한 스케일링
+                    double hop_factor = static_cast<double>(N) / static_cast<double>(hop_size);
+                    double scale = 1.0 / (std::sqrt(sum_sq) * std::sqrt(hop_factor));
+                    float scale_f = static_cast<float>(scale);
+                    for (size_t i = 0; i < N; ++i) {
+                        data[i] *= scale_f;
+                    }
+                }
+            } else {
+                // hop_size가 없으면 L2 정규화로 폴백
+                double sum_sq = calculateSumOfSquares(data, N);
+                if (sum_sq > 0.0) {
+                    float scale = static_cast<float>(1.0 / std::sqrt(sum_sq));
+                    for (size_t i = 0; i < N; ++i) {
+                        data[i] *= scale;
+                    }
+                }
+            }
+            break;
+        }
     }
 }
 
@@ -321,8 +351,8 @@ double WindowLUT::calculateOLAGain(const float* window, size_t N, size_t hop_siz
 }
 
 float* WindowLUT::allocateAlignedMemory(size_t N) const {
-    // 16-byte 정렬된 메모리 할당 (PR2 요구사항)
-    const size_t alignment = 16;
+    // 32-byte 정렬된 메모리 할당 (AVX2/NEON 벡터화 지원)
+    const size_t alignment = 32;
     const size_t size = N * sizeof(float);
 
     void* ptr = nullptr;

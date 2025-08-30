@@ -25,15 +25,16 @@ enum class NormalizationType {
     NONE,           // 정규화 없음
     SUM_TO_ONE,     // 합이 1이 되도록 정규화
     L2_NORM,        // L2 노름이 1이 되도록 정규화 (분석용)
-    OLA_UNITY_GAIN  // OLA 합성 시 이득이 1이 되도록 정규화 (합성용)
+    OLA_UNITY_GAIN, // OLA 합성 시 이득이 1이 되도록 정규화 (합성용)
+    OLA_SUM_WSQ     // 분석창이 이미 곱해진 프레임용 정규화 (∑w²)
 };
 
 /**
  * 캐시 정렬된 윈도우 데이터 구조
- * 128-byte 캐시라인에 맞춰 정렬
+ * AVX2/NEON 벡터화를 위한 32-byte 정렬
  */
-struct alignas(16) WindowData {
-    alignas(16) float* data;    // 윈도우 데이터 (16-byte 정렬)
+struct alignas(32) WindowData {
+    alignas(32) float* data;    // 윈도우 데이터 (32-byte 정렬)
     size_t size;                // 윈도우 크기
     WindowType type;            // 윈도우 타입
     bool periodic;              // 주기적 윈도우 여부 (FFT용)
@@ -60,14 +61,20 @@ struct alignas(16) WindowData {
  * - periodic 옵션: FFT용(DFT 주기성) vs 분석창(실신호)
  * - 정규화 옵션: sum=1, L2=1, OLA 보정 지원
  * - 길이별 캐시를 통한 성능 최적화
- * - 메모리 정렬 최적화 (16-byte 이상)
- * - 스레드 안전성 보장
+ * - 메모리 정렬 최적화 (32-byte AVX2/NEON 지원)
+ * - 스레드 안전성 보장 (읽기 작업)
  * - 임의 길이 N 지원 (2^k 및 비2^k)
  *
  * 정규화 규칙:
  * - 분석만 쓸 때: L2=1도 OK
  * - 합성 고려 시: ∑ w²[n]·hop에 맞춘 보정 필수
  * - OLA 합성 시 이득 1이 되도록 창의 제곱합/중첩 보정
+ *
+ * 멀티스레드 사용 가이드:
+ * - GetWindow(): 스레드 안전 (mutex 보호)
+ * - clearCache(): 테스트용, 운영 환경에서 주의 필요
+ * - 캐시된 포인터는 clearCache() 호출 전까지 유효
+ * - 운영 환경에서는 캐시 정리를 피하거나 shared_ptr 핸들 사용 권장
  */
 class WindowLUT {
 public:
@@ -145,6 +152,12 @@ public:
 
     /**
      * 캐시 초기화 (테스트용)
+     *
+     * ⚠️  멀티스레드 안전성 주의사항:
+     * - 이 함수는 주로 테스트 환경에서 사용됩니다
+     * - 운영 환경에서 호출 시 다른 스레드가 윈도우 데이터를 사용 중이면 UAF 위험이 있습니다
+     * - 멀티스레드 환경에서는 모든 스레드가 윈도우 사용을 완료한 후에만 호출하세요
+     * - 또는 shared_ptr 기반 핸들 시스템으로 업그레이드를 고려하세요
      */
     void clearCache();
 
