@@ -3,7 +3,10 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 cc_library(
     name = "frame_queue",
     srcs = ["frame/FrameQueue.cc"],
-    hdrs = ["frame/FrameQueue.h"],
+    hdrs = [
+        "frame/FrameQueue.h",
+        "frame/Indexing.h",
+    ],
     visibility = ["//visibility:public"],
     deps = [],
 )

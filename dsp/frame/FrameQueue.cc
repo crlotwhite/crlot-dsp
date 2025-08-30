@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include "Indexing.h"
 
 namespace dsp {
 
@@ -75,47 +76,20 @@ std::vector<float> FrameQueue::createPaddedInput(const float* in, size_t len) co
     size_t padded_len = len + 2 * pad_size;
     std::vector<float> padded_input(padded_len);
 
-    // 앞쪽 패딩
-    for (size_t i = 0; i < pad_size; ++i) {
-        switch (pad_mode_) {
-            case PadMode::CONSTANT:
-                padded_input[i] = 0.0f;
-                break;
-            case PadMode::REFLECT:
-                if (len > 0) {
-                    size_t reflect_idx = std::min(pad_size - 1 - i, len - 1);
-                    padded_input[i] = in[reflect_idx];
-                } else {
-                    padded_input[i] = 0.0f;
-                }
-                break;
-            case PadMode::EDGE:
-                padded_input[i] = (len > 0) ? in[0] : 0.0f;
-                break;
-        }
-    }
+    // 안전한 인덱싱을 위해 signed 정수로 처리
+    int signed_len = static_cast<int>(len);
+    int signed_pad_size = static_cast<int>(pad_size);
 
-    // 원본 데이터 복사
-    std::copy(in, in + len, padded_input.begin() + pad_size);
+    // 전체 패딩된 범위를 한 번에 처리
+    for (int i = -signed_pad_size; i < signed_len + signed_pad_size; ++i) {
+        size_t output_idx = i + signed_pad_size;  // 출력 배열의 인덱스
 
-    // 뒤쪽 패딩
-    for (size_t i = 0; i < pad_size; ++i) {
-        size_t idx = pad_size + len + i;
-        switch (pad_mode_) {
-            case PadMode::CONSTANT:
-                padded_input[idx] = 0.0f;
-                break;
-            case PadMode::REFLECT:
-                if (len > 0) {
-                    size_t reflect_idx = len - 1 - std::min(i, len - 1);
-                    padded_input[idx] = in[reflect_idx];
-                } else {
-                    padded_input[idx] = 0.0f;
-                }
-                break;
-            case PadMode::EDGE:
-                padded_input[idx] = (len > 0) ? in[len - 1] : 0.0f;
-                break;
+        if (i >= 0 && i < signed_len) {
+            // 원본 데이터 범위 내
+            padded_input[output_idx] = in[i];
+        } else {
+            // 패딩 영역: 안전한 패딩 값 계산
+            padded_input[output_idx] = getPaddingValueSafe(in, signed_len, i, pad_mode_);
         }
     }
 
@@ -141,23 +115,14 @@ size_t FrameQueue::calculateNumFrames(size_t padded_len) const {
 }
 
 float FrameQueue::getPaddingValue(const std::vector<float>& padded_input, int idx) const {
-    switch (pad_mode_) {
-        case PadMode::CONSTANT:
-            return 0.0f;
-        case PadMode::REFLECT:
-            if (padded_input.empty()) return 0.0f;
-            if (idx < 0) {
-                return padded_input[std::min(static_cast<size_t>(-idx - 1), padded_input.size() - 1)];
-            } else {
-                size_t reflect_idx = padded_input.size() - 1 - (idx - padded_input.size());
-                return padded_input[std::max(0, static_cast<int>(reflect_idx))];
-            }
-        case PadMode::EDGE:
-            if (padded_input.empty()) return 0.0f;
-            return (idx < 0) ? padded_input[0] : padded_input[padded_input.size() - 1];
-        default:
-            return 0.0f;
+    // 이 함수는 더 이상 사용되지 않지만 하위 호환성을 위해 유지
+    // 새로운 createPaddedInput에서는 getPaddingValueSafe를 사용
+    if (padded_input.empty()) {
+        return 0.0f;
     }
+
+    // 안전한 버전으로 위임
+    return getPaddingValueSafe(padded_input.data(), static_cast<int>(padded_input.size()), idx, pad_mode_);
 }
 
 } // namespace dsp
