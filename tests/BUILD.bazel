@@ -122,3 +122,15 @@ cc_test(
     ],
     copts = ["-std=c++17"],
 )
+
+cc_test(
+    name = "ring_buffer_test",
+    size = "small",
+    srcs = ["ring_buffer_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:ring_buffer",
+    ],
+    copts = ["-std=c++17"],
+)

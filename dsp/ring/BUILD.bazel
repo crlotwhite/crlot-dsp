@@ -1,0 +1,12 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "ring_buffer",
+    srcs = ["ring_buffer.cc"],
+    hdrs = ["ring_buffer.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//dsp:base",
+    ],
+    copts = ["-std=c++17"],
+)

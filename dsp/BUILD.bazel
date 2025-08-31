@@ -49,3 +49,9 @@ cc_library(
     deps = [],
     copts = ["-std=c++17"],
 )
+
+cc_library(
+    name = "ring_buffer",
+    visibility = ["//visibility:public"],
+    deps = ["//dsp/ring:ring_buffer"],
+)
