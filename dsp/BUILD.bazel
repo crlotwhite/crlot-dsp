@@ -22,8 +22,8 @@ cc_library(
 
 cc_library(
     name = "framer",
-    srcs = ["framer.cc"],
-    hdrs = ["framer.h"],
+    srcs = ["frame/framer.cc"],
+    hdrs = ["frame/framer.h"],
     visibility = ["//visibility:public"],
     deps = [],
     copts = ["-std=c++17"],
