@@ -14,5 +14,7 @@ cc_binary(
         "@spdlog//:spdlog",
         "@cpu_features//:cpuinfo",
         "//third_party:r8brain-free",
+        "@highway//:hwy",
+        "@eigen//:eigen",
     ],
 )

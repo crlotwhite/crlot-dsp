@@ -6,9 +6,43 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
+#include <sstream>
 
 #include "io/wav.h"
 #include "dsp/fft/api/fft_api.h"
+
+// Eigen 헤더
+#include "Eigen/Dense"
+
+// Google Highway 헤더
+#include "hwy/highway.h"
+
+HWY_BEFORE_NAMESPACE();
+
+namespace hwy_example {
+namespace HWY_NAMESPACE {
+
+void ScalePcmData(const float* input, float* output, size_t size, float scale) {
+  const HWY_FULL(float) d;  // 현재 타겟에 맞는 SIMD 레인 수 결정
+  size_t i = 0;
+
+  // SIMD 레인 단위로 처리
+  for (; i + Lanes(d) <= size; i += Lanes(d)) {
+    const auto v = Load(d, input + i);  // SIMD 레인에 데이터 로드
+    const auto scaled = Mul(v, Set(d, scale));  // 스케일링
+    Store(scaled, d, output + i);  // 결과 저장
+  }
+
+  // 남은 요소들을 스칼라 방식으로 처리
+  for (; i < size; ++i) {
+    output[i] = input[i] * scale;
+  }
+}
+
+}  // namespace HWY_NAMESPACE
+}  // namespace hwy_example
+
+HWY_AFTER_NAMESPACE();
 
 // r8brain-free 헤더
 #include "CDSPResampler.h"
@@ -315,6 +349,77 @@ int main() {
     SPDLOG_ERROR("r8brain-free 테스트 중 예외 발생: {}", e.what());
   } catch (...) {
     SPDLOG_ERROR("r8brain-free 테스트 중 알 수 없는 예외 발생");
+  }
+
+  // Google Highway SIMD 예시: pcm 데이터를 벡터화된 방식으로 스케일링
+  SPDLOG_INFO("Google Highway SIMD 예시 시작");
+  try {
+    // 예시 실행
+    std::vector<float> scaled_pcm(pcm.size());
+    const float scale_factor = 0.5f;  // 0.5배 스케일링
+
+    SPDLOG_INFO("Highway를 사용한 벡터화된 스케일링 실행 (스케일 팩터: {:.2f})", scale_factor);
+    hwy_example::HWY_NAMESPACE::ScalePcmData(pcm.data(), scaled_pcm.data(), pcm.size(), scale_factor);
+
+    SPDLOG_INFO("Highway SIMD 스케일링 완료, 처리된 샘플 수: {}", scaled_pcm.size());
+
+    // 결과 검증: 처음 몇 개 샘플 출력
+    SPDLOG_INFO("원본 pcm 샘플 (처음 5개):");
+    for (size_t i = 0; i < std::min<size_t>(5, pcm.size()); ++i) {
+      SPDLOG_INFO("  원본[{}]: {:.6f}", i, pcm[i]);
+    }
+
+    SPDLOG_INFO("스케일링된 pcm 샘플 (처음 5개):");
+    for (size_t i = 0; i < std::min<size_t>(5, scaled_pcm.size()); ++i) {
+      SPDLOG_INFO("  스케일링[{}]: {:.6f}", i, scaled_pcm[i]);
+    }
+
+    SPDLOG_INFO("Google Highway SIMD 예시 성공!");
+
+  } catch (const std::exception& e) {
+    SPDLOG_ERROR("Google Highway 예시 중 예외 발생: {}", e.what());
+  } catch (...) {
+    SPDLOG_ERROR("Google Highway 예시 중 알 수 없는 예외 발생");
+  }
+
+  // Eigen 예시: 간단한 행렬 연산
+  SPDLOG_INFO("Eigen 예시 시작");
+  try {
+    // 2x2 행렬 생성 및 초기화
+    Eigen::MatrixXd m(2, 2);
+    m(0, 0) = 3;
+    m(1, 0) = 2.5;
+    m(0, 1) = -1;
+    m(1, 1) = m(1, 0) + m(0, 1);
+    std::stringstream ss_m;
+    ss_m << m;
+    SPDLOG_INFO("행렬 m:\n{}", ss_m.str());
+
+    // 다른 행렬 생성
+    Eigen::MatrixXd n(2, 2);
+    n << 1, 2,
+         3, 4;
+    std::stringstream ss_n;
+    ss_n << n;
+    SPDLOG_INFO("행렬 n:\n{}", ss_n.str());
+
+    // 행렬 곱셈
+    Eigen::MatrixXd p = m * n;
+    std::stringstream ss_p;
+    ss_p << p;
+    SPDLOG_INFO("m * n:\n{}", ss_p.str());
+
+    // 역행렬 계산
+    Eigen::MatrixXd inv_m = m.inverse();
+    std::stringstream ss_inv;
+    ss_inv << inv_m;
+    SPDLOG_INFO("m의 역행렬:\n{}", ss_inv.str());
+
+    SPDLOG_INFO("Eigen 예시 성공!");
+  } catch (const std::exception& e) {
+    SPDLOG_ERROR("Eigen 예시 중 예외 발생: {}", e.what());
+  } catch (...) {
+    SPDLOG_ERROR("Eigen 예시 중 알 수 없는 예외 발생");
   }
 
   SPDLOG_INFO("프로그램 종료");
