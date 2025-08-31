@@ -1,0 +1,25 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+
+cc_binary(
+    name = "ola_benchmark",
+    srcs = ["ola_benchmark.cc"],
+    deps = [
+        "@google_benchmark//:benchmark",
+        "//dsp:ola_accumulator",
+        "//dsp:window_lut",
+    ],
+    copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],
+)
+
+cc_binary(
+    name = "performance_benchmark",
+    srcs = ["performance_benchmark.cc"],
+    deps = [
+        "@google_benchmark//:benchmark",
+        "//dsp:ola_accumulator",
+        "//dsp:window_lut",
+        "//dsp:frame_queue",
+        "//dsp/fft:fft",
+    ],
+    copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],  # 성능 최적화 플래그
+)
