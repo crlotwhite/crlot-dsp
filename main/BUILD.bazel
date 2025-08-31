@@ -12,5 +12,6 @@ cc_binary(
         "//dsp/fft:fft",
         "//io:wav",
         "@spdlog//:spdlog",
+        "@cpu_features//:cpuinfo",
     ],
 )

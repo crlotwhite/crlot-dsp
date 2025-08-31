@@ -10,6 +10,16 @@
 #include "io/wav.h"
 #include "dsp/fft/api/fft_api.h"
 
+// cpu_features 헤더
+#include "cpu_features_macros.h"
+#if defined(CPU_FEATURES_ARCH_X86)
+#include "cpuinfo_x86.h"
+#elif defined(CPU_FEATURES_ARCH_AARCH64)
+#include "cpuinfo_aarch64.h"
+#else
+// 다른 아키텍처 지원 가능
+#endif
+
 // Bazel 환경에서 파일 경로를 올바르게 처리하는 헬퍼 함수
 static std::string RunfilePath(const std::string& relative) {
     const char* srcdir = std::getenv("TEST_SRCDIR");
@@ -25,6 +35,28 @@ int main() {
   spdlog::set_level(spdlog::level::info);
 
   SPDLOG_INFO("프로그램 시작");
+
+  // CPU 기능 정보 출력 (cpu_features 사용)
+#if defined(CPU_FEATURES_ARCH_X86)
+  const cpu_features::X86Info info = cpu_features::GetX86Info();
+  SPDLOG_INFO("CPU 아키텍처: x86");
+  SPDLOG_INFO("CPU 브랜드: {}", info.brand_string);
+  SPDLOG_INFO("CPU 패밀리: {}, 모델: {}, 스테핑: {}", info.family, info.model, info.stepping);
+  SPDLOG_INFO("CPU 기능: SSE={}, SSE2={}, SSE3={}, SSSE3={}, SSE4_1={}, SSE4_2={}, AVX={}",
+              info.features.sse, info.features.sse2, info.features.sse3,
+              info.features.ssse3, info.features.sse4_1, info.features.sse4_2,
+              info.features.avx);
+#elif defined(CPU_FEATURES_ARCH_AARCH64)
+  const cpu_features::Aarch64Info info = cpu_features::Aarch64Info();
+  SPDLOG_INFO("CPU 아키텍처: aarch64");
+  SPDLOG_INFO("CPU 구현자: {}, 변형: {}, 파트: {}, 수정: {}", info.implementer, info.variant, info.part, info.revision);
+  SPDLOG_INFO("CPU 기능: FP={}, ASIMD={}, AES={}, PMULL={}, SHA1={}, SHA2={}, CRC32={}",
+              info.features.fp, info.features.asimd, info.features.aes,
+              info.features.pmull, info.features.sha1, info.features.sha2,
+              info.features.crc32);
+#else
+  SPDLOG_INFO("CPU 아키텍처: 지원되지 않는 아키텍처");
+#endif
 
   SPDLOG_INFO("Hello, world!");
 
