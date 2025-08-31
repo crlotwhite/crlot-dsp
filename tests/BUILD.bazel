@@ -134,3 +134,15 @@ cc_test(
     ],
     copts = ["-std=c++17"],
 )
+
+cc_test(
+    name = "kernels_test",
+    size = "small",
+    srcs = ["kernels_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:kernels_scalar",
+    ],
+    copts = ["-std=c++17"],
+)

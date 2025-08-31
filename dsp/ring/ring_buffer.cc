@@ -30,7 +30,7 @@ RingBuffer<T>::~RingBuffer() {
 }
 
 template <typename T>
-std::pair<base::Span<T>, base::Span<T>> RingBuffer<T>::split(size_t start, size_t len) {
+std::pair<base::Span<T>, base::Span<T>> RingBuffer<T>::split(size_t start, size_t len) noexcept {
   // Handle empty request
   if (len == 0) {
     return {base::Span<T>(), base::Span<T>()};
@@ -74,7 +74,7 @@ std::pair<base::Span<T>, base::Span<T>> RingBuffer<T>::split(size_t start, size_
 }
 
 template <typename T>
-std::pair<base::Span<const T>, base::Span<const T>> RingBuffer<T>::split(size_t start, size_t len) const {
+std::pair<base::Span<const T>, base::Span<const T>> RingBuffer<T>::split(size_t start, size_t len) const noexcept {
   // Handle empty request
   if (len == 0) {
     return {base::Span<const T>(), base::Span<const T>()};

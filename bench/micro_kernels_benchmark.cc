@@ -5,6 +5,7 @@
 #include <iomanip>
 #include "dsp/ola/OLAAccumulator.h"
 #include "dsp/window/WindowLUT.h"
+#include "dsp/ola/kernels.h"
 
 using namespace dsp;
 
@@ -184,6 +185,64 @@ BENCHMARK_REGISTER_F(KernelMicroBenchmark, WindowOLAKernel)
     ->Iterations(5000);
 
 BENCHMARK_REGISTER_F(KernelMicroBenchmark, WindowMultiplySIMD)
+    ->Unit(benchmark::kNanosecond)
+    ->Iterations(100000);
+
+// 스칼라 커널 벤치마크들
+BENCHMARK_DEFINE_F(KernelMicroBenchmark, AxpyKernel)(benchmark::State& state) {
+    std::vector<float> dst(frame_size_, 1.0f);
+    std::vector<float> src(frame_size_, 2.0f);
+    float g = 0.5f;
+
+    for (auto _ : state) {
+        axpy(dst.data(), src.data(), g, frame_size_);
+        benchmark::DoNotOptimize(dst.data());
+    }
+
+    state.SetItemsProcessed(state.iterations() * frame_size_);
+    state.SetBytesProcessed(state.iterations() * frame_size_ * sizeof(float) * 2);
+}
+
+BENCHMARK_DEFINE_F(KernelMicroBenchmark, AxpyWindowedKernel)(benchmark::State& state) {
+    std::vector<float> dst(frame_size_, 1.0f);
+    std::vector<float> src(frame_size_, 2.0f);
+    float g = 0.5f;
+
+    for (auto _ : state) {
+        axpy_windowed(dst.data(), src.data(), window_, g, frame_size_);
+        benchmark::DoNotOptimize(dst.data());
+    }
+
+    state.SetItemsProcessed(state.iterations() * frame_size_);
+    state.SetBytesProcessed(state.iterations() * frame_size_ * sizeof(float) * 3);
+}
+
+BENCHMARK_DEFINE_F(KernelMicroBenchmark, NormalizeAndClearKernel)(benchmark::State& state) {
+    std::vector<float> out(frame_size_);
+    std::vector<float> acc(frame_size_, 2.0f);
+    std::vector<float> norm(frame_size_, 2.0f);
+    float eps = 1e-6f;
+
+    for (auto _ : state) {
+        normalize_and_clear(out.data(), acc.data(), norm.data(), eps, frame_size_);
+        benchmark::DoNotOptimize(out.data());
+        benchmark::DoNotOptimize(acc.data());
+    }
+
+    state.SetItemsProcessed(state.iterations() * frame_size_);
+    state.SetBytesProcessed(state.iterations() * frame_size_ * sizeof(float) * 3);
+}
+
+// 스칼라 커널 벤치마크 등록
+BENCHMARK_REGISTER_F(KernelMicroBenchmark, AxpyKernel)
+    ->Unit(benchmark::kNanosecond)
+    ->Iterations(100000);
+
+BENCHMARK_REGISTER_F(KernelMicroBenchmark, AxpyWindowedKernel)
+    ->Unit(benchmark::kNanosecond)
+    ->Iterations(100000);
+
+BENCHMARK_REGISTER_F(KernelMicroBenchmark, NormalizeAndClearKernel)
     ->Unit(benchmark::kNanosecond)
     ->Iterations(100000);
 

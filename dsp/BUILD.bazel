@@ -39,6 +39,15 @@ cc_library(
 )
 
 cc_library(
+    name = "kernels_scalar",
+    srcs = ["ola/kernels.cc"],
+    hdrs = ["ola/kernels.h"],
+    visibility = ["//visibility:public"],
+    deps = [],
+    copts = ["-std=c++17"],
+)
+
+cc_library(
     name = "base",
     srcs = ["base/aligned_alloc.cc"],
     hdrs = [
