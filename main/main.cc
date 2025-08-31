@@ -10,6 +10,9 @@
 #include "io/wav.h"
 #include "dsp/fft/api/fft_api.h"
 
+// r8brain-free 헤더
+#include "CDSPResampler.h"
+
 // cpu_features 헤더
 #include "cpu_features_macros.h"
 #if defined(CPU_FEATURES_ARCH_X86)
@@ -196,6 +199,122 @@ int main() {
     SPDLOG_INFO("WavWriter 닫기 완료");
   } else {
     SPDLOG_ERROR("WavWriter 열기 실패");
+  }
+
+  // r8brain-free 리샘플링 테스트 (실제 oboe.wav 파일 사용)
+  SPDLOG_INFO("r8brain-free 리샘플링 테스트 시작 (oboe.wav 파일 사용)");
+  try {
+    // WAV 파일에서 읽은 데이터를 사용
+    const double srcSampleRate = static_cast<double>(sampleRate); // WAV 파일의 실제 샘플레이트
+    const double dstSampleRate = 48000.0; // 목표 샘플레이트 (48kHz로 업샘플링)
+
+    SPDLOG_INFO("WAV 파일 리샘플링: {}Hz -> {}Hz", srcSampleRate, dstSampleRate);
+
+    // PCM 데이터를 mono로 변환하고 double 타입으로 변환
+    std::vector<double> inputData(totalFrames);
+    for (size_t i = 0; i < totalFrames; ++i) {
+      double sample = 0.0;
+      for (size_t c = 0; c < channels; ++c) {
+        sample += pcm[i * channels + c];
+      }
+      inputData[i] = sample / static_cast<double>(channels);
+    }
+
+    SPDLOG_INFO("r8b::CDSPResampler 생성 시도");
+    // r8b::CDSPResampler 생성 (원본 샘플레이트, 목표 샘플레이트, 최대 입력 길이)
+    r8b::CDSPResampler resampler(srcSampleRate, dstSampleRate, static_cast<int>(totalFrames));
+
+    SPDLOG_INFO("r8b::CDSPResampler 생성 성공");
+
+    // 출력 버퍼 크기 계산
+    int maxOutputSize = static_cast<int>(std::ceil(totalFrames * dstSampleRate / srcSampleRate) + 1000);
+    std::vector<double> outputData(maxOutputSize, 0.0);
+
+    SPDLOG_INFO("리샘플링 실행: 입력 {} 샘플 -> 예상 출력 {} 샘플", totalFrames, maxOutputSize);
+
+    // 스트리밍 방식으로 리샘플링 테스트
+    int totalOutputSamples = 0;
+    const int chunkSize = 4096; // 청크 단위로 처리
+
+    for (size_t offset = 0; offset < totalFrames; offset += chunkSize) {
+      size_t currentChunkSize = std::min(static_cast<size_t>(chunkSize), totalFrames - offset);
+      double* outputPtr;
+
+      int chunkOutputSamples = resampler.process(
+        inputData.data() + offset, static_cast<int>(currentChunkSize), outputPtr);
+
+      if (chunkOutputSamples > 0 && totalOutputSamples + chunkOutputSamples <= maxOutputSize) {
+        // 출력 데이터를 복사
+        std::copy(outputPtr, outputPtr + chunkOutputSamples,
+                 outputData.data() + totalOutputSamples);
+        totalOutputSamples += chunkOutputSamples;
+      }
+    }
+
+    SPDLOG_INFO("리샘플링 완료, 총 출력 샘플 수: {}", totalOutputSamples);
+
+    // 결과 검증
+    if (totalOutputSamples > 0) {
+      SPDLOG_INFO("r8brain-free 리샘플링 성공!");
+      SPDLOG_INFO("원본 오디오: {}Hz -> 리샘플링 후: {}Hz",
+                  srcSampleRate, dstSampleRate);
+      SPDLOG_INFO("원본 길이: {:.2f}초 -> 리샘플링 후 길이: {:.2f}초",
+                  static_cast<double>(totalFrames) / srcSampleRate,
+                  static_cast<double>(totalOutputSamples) / dstSampleRate);
+
+      // 첫 몇 개 샘플 값 출력
+      SPDLOG_INFO("처음 5개 입력 샘플 (원본 WAV 데이터):");
+      for (size_t i = 0; i < std::min<size_t>(5, totalFrames); ++i) {
+        SPDLOG_INFO("  입력[{}]: {:.6f}", i, inputData[i]);
+      }
+
+      SPDLOG_INFO("처음 5개 출력 샘플 (리샘플링 후):");
+      for (int i = 0; i < std::min(5, totalOutputSamples); ++i) {
+        SPDLOG_INFO("  출력[{}]: {:.6f}", i, outputData[i]);
+      }
+
+      // 리샘플링 비율 검증
+      double expectedRatio = dstSampleRate / srcSampleRate;
+      double actualRatio = static_cast<double>(totalOutputSamples) / totalFrames;
+      SPDLOG_INFO("예상 리샘플링 비율: {:.6f}, 실제 비율: {:.6f}", expectedRatio, actualRatio);
+
+      // 성공 지표
+      double ratioDiff = std::abs(expectedRatio - actualRatio);
+      if (ratioDiff < 0.01) {
+        SPDLOG_INFO("리샘플링 비율이 정확합니다! (차이: {:.6f})", ratioDiff);
+      } else {
+        SPDLOG_WARN("리샘플링 비율이 약간 다릅니다 (차이: {:.6f})", ratioDiff);
+      }
+
+      // 리샘플링된 오디오를 파일로 저장 (테스트용)
+      SPDLOG_INFO("리샘플링된 오디오를 파일로 저장");
+      WavWriter resampledWriter;
+      if (resampledWriter.open("resampled_oboe.wav", 1, static_cast<int>(dstSampleRate), 16)) {
+        // double 데이터를 float으로 변환
+        std::vector<float> resampledPcm(totalOutputSamples);
+        for (int i = 0; i < totalOutputSamples; ++i) {
+          resampledPcm[i] = static_cast<float>(outputData[i]);
+        }
+
+        size_t framesWritten;
+        if (resampledWriter.write(resampledPcm.data(), totalOutputSamples, &framesWritten)) {
+          SPDLOG_INFO("리샘플링된 오디오 저장 성공: {} 프레임 (resampled_oboe.wav)", framesWritten);
+        } else {
+          SPDLOG_ERROR("리샘플링된 오디오 저장 실패");
+        }
+        resampledWriter.close();
+      } else {
+        SPDLOG_ERROR("리샘플링된 오디오 파일 열기 실패");
+      }
+
+    } else {
+      SPDLOG_ERROR("r8brain-free 리샘플링 실패 - 출력 샘플이 생성되지 않았습니다");
+    }
+
+  } catch (const std::exception& e) {
+    SPDLOG_ERROR("r8brain-free 테스트 중 예외 발생: {}", e.what());
+  } catch (...) {
+    SPDLOG_ERROR("r8brain-free 테스트 중 알 수 없는 예외 발생");
   }
 
   SPDLOG_INFO("프로그램 종료");

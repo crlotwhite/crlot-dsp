@@ -29,3 +29,21 @@ cc_library(
     strip_include_prefix = "kissfft",
     copts = ["-Wno-unused-variable"],  # 경고 억제
 )
+
+cc_library(
+    name = "r8brain-free",
+    srcs = [
+        "r8brain-free/pffft.cpp",
+        "r8brain-free/r8bbase.cpp",
+    ],
+    hdrs = glob([
+        "r8brain-free/*.h",
+        "r8brain-free/*.inc",
+    ]),
+    strip_include_prefix = "r8brain-free",
+    copts = [
+        "-Wno-unused-variable",
+        "-Wno-unused-function",
+        "-Wno-vla-cxx-extension",
+    ],
+)

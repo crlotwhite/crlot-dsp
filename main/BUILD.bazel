@@ -13,5 +13,6 @@ cc_binary(
         "//io:wav",
         "@spdlog//:spdlog",
         "@cpu_features//:cpuinfo",
+        "//third_party:r8brain-free",
     ],
 )
