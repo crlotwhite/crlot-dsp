@@ -4,3 +4,9 @@
 [submodule "third_party/kissfft"]
 	path = third_party/kissfft
 	url = https://github.com/mborgerding/kissfft
+[submodule "third_party/cpu_features"]
+	path = third_party/cpu_features
+	url = https://github.com/google/cpu_features.git
+[submodule "third_party/r8brain-free"]
+	path = third_party/r8brain-free
+	url = https://github.com/avaneev/r8brain-free-src.git
