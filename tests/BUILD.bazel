@@ -110,3 +110,15 @@ cc_test(
     ],
     copts = ["-std=c++17"],
 )
+
+cc_test(
+    name = "base_test",
+    size = "small",
+    srcs = ["base_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:base",
+    ],
+    copts = ["-std=c++17"],
+)
