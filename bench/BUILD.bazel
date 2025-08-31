@@ -1,4 +1,18 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_binary(
+    name = "performance_benchmark",
+    srcs = ["performance_benchmark.cc"],
+    deps = [
+        "@google_benchmark//:benchmark",
+        "//dsp:ola_accumulator",
+        "//dsp:window_lut",
+        "//dsp:frame_queue",
+        "//dsp/fft:fft",
+    ],
+    copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],
+)
 
 cc_binary(
     name = "ola_benchmark",
@@ -11,15 +25,61 @@ cc_binary(
     copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],
 )
 
-cc_binary(
-    name = "performance_benchmark",
-    srcs = ["performance_benchmark.cc"],
+cc_library(
+    name = "micro_fft_benchmark_lib",
+    srcs = ["micro_fft_benchmark.cc"],
+    deps = [
+        "@google_benchmark//:benchmark",
+        "//dsp/fft:fft",
+    ],
+    copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],
+)
+
+cc_library(
+    name = "micro_kernels_benchmark_lib",
+    srcs = ["micro_kernels_benchmark.cc"],
     deps = [
         "@google_benchmark//:benchmark",
         "//dsp:ola_accumulator",
         "//dsp:window_lut",
-        "//dsp:frame_queue",
-        "//dsp/fft:fft",
     ],
-    copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],  # 성능 최적화 플래그
+    copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],
+)
+
+cc_library(
+    name = "e2e_benchmark_lib",
+    srcs = ["e2e_benchmark.cc"],
+    deps = [
+        "@google_benchmark//:benchmark",
+        "//dsp:ola_accumulator",
+        "//dsp:window_lut",
+        "//dsp:framer",
+        "//dsp/fft:fft",
+        "//io:wav",
+    ],
+    copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],
+)
+
+cc_binary(
+    name = "micro_fft_benchmark",
+    deps = [":micro_fft_benchmark_lib"],
+)
+
+cc_binary(
+    name = "micro_kernels_benchmark",
+    deps = [":micro_kernels_benchmark_lib"],
+)
+
+cc_binary(
+    name = "e2e_benchmark",
+    deps = [":e2e_benchmark_lib"],
+)
+
+cc_binary(
+    name = "regression_test",
+    srcs = ["regression_test.cc"],
+    deps = [
+        "@google_benchmark//:benchmark",
+    ],
+    copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],
 )
