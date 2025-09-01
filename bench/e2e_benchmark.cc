@@ -58,9 +58,7 @@ public:
         ola_config.frame_size = frame_size_;
         ola_config.hop_size = hop_size_;
         ola_config.channels = 1;
-        ola_config.center = true;
         ola_config.apply_window_inside = true;
-        ola_config.gain = 1.0f;
 
         ola_ = std::make_unique<OLAAccumulator>(ola_config);
         ola_->set_window(window_, frame_size_);
@@ -167,14 +165,15 @@ BENCHMARK_DEFINE_F(E2EBenchmark, FullPipeline)(benchmark::State& state) {
             fft_plan_->inverse(spectrum.data(), processed_frame.data());
 
             // OLA 누적
-            ola_->push_frame(frame_count++, processed_frame.data());
+            ola_->push_frame_AoS(processed_frame.data(), nullptr, frame_count * hop_size_, 0, frame_size_, 1.0f);
+            frame_count++;
         }
 
         // 3. OLA → WAV
         output_samples = 0;
+        std::vector<float*> ch_out = {output.data()};
         while (output_samples < total_samples_) {
-            int samples = ola_->pull(output.data() + output_samples,
-                                   total_samples_ - output_samples);
+            size_t samples = ola_->produce(ch_out.data(), total_samples_ - output_samples);
             if (samples == 0) break;
             output_samples += samples;
         }
@@ -216,13 +215,14 @@ BENCHMARK_DEFINE_F(E2EBenchmark, QualityMetrics)(benchmark::State& state) {
             fft_plan_->inverse(spectrum.data(), processed_frame.data());
 
             // OLA
-            ola_->push_frame(frame_count++, processed_frame.data());
+            ola_->push_frame_AoS(processed_frame.data(), nullptr, frame_count * hop_size_, 0, frame_size_, 1.0f);
+            frame_count++;
         }
 
         // 출력 수집
+        std::vector<float*> ch_out = {output.data()};
         while (output_samples < total_samples_) {
-            int samples = ola_->pull(output.data() + output_samples,
-                                   total_samples_ - output_samples);
+            size_t samples = ola_->produce(ch_out.data(), total_samples_ - output_samples);
             if (samples == 0) break;
             output_samples += samples;
         }
