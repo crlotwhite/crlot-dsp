@@ -216,3 +216,108 @@ TEST_F(OLAAccumulatorTest, Reset) {
     EXPECT_EQ(ola.meter_peak(), 0.0f);
     EXPECT_FALSE(ola.has_window());
 }
+
+// 단일 채널 AoS 테스트
+TEST_F(OLAAccumulatorTest, SingleChannelAoS) {
+    OLAAccumulator ola(config_);
+
+    // 윈도우 설정
+    std::vector<float> window(config_.frame_size, 1.0f);
+    ola.set_window(window.data(), config_.frame_size);
+
+    // AoS 입력 생성 (인터리브)
+    std::vector<float> aos_input(config_.frame_size * config_.channels, 0.5f);
+
+    // 출력 버퍼 준비
+    std::vector<float> output(config_.frame_size);
+    float* ch_out[1] = {output.data()};
+
+    // AoS 프레임 추가
+    ola.push_frame_AoS(aos_input.data(), window.data(), 0, 0, config_.frame_size, 1.0f);
+
+    // 출력
+    size_t produced = ola.produce(ch_out, config_.frame_size);
+
+    // 검증
+    EXPECT_GT(produced, 0);
+    EXPECT_EQ(ola.produced_samples(), config_.frame_size);
+}
+
+// 다채널 AoS 테스트
+TEST_F(OLAAccumulatorTest, MultiChannelAoS) {
+    config_.channels = 2;
+    OLAAccumulator ola(config_);
+
+    // 윈도우 설정
+    std::vector<float> window(config_.frame_size, 1.0f);
+    ola.set_window(window.data(), config_.frame_size);
+
+    // AoS 입력 생성 (인터리브: ch0_s0, ch1_s0, ch0_s1, ch1_s1, ...)
+    std::vector<float> aos_input(config_.frame_size * config_.channels);
+    for (size_t i = 0; i < config_.frame_size; ++i) {
+        aos_input[i * 2 + 0] = 0.5f; // ch0
+        aos_input[i * 2 + 1] = 0.3f; // ch1
+    }
+
+    // 출력 버퍼 준비
+    std::vector<float> ch0_out(config_.frame_size);
+    std::vector<float> ch1_out(config_.frame_size);
+    float* ch_out[2] = {ch0_out.data(), ch1_out.data()};
+
+    // AoS 프레임 추가
+    ola.push_frame_AoS(aos_input.data(), window.data(), 0, 0, config_.frame_size, 1.0f);
+
+    // 출력
+    size_t produced = ola.produce(ch_out, config_.frame_size);
+
+    // 검증
+    EXPECT_GT(produced, 0);
+    EXPECT_EQ(ola.produced_samples(), config_.frame_size);
+}
+
+// AoS vs SoA 일치성 테스트
+TEST_F(OLAAccumulatorTest, AoSvsSoAConsistency) {
+    config_.channels = 2;
+    OLAAccumulator ola_aos(config_);
+    OLAAccumulator ola_soa(config_);
+
+    // 윈도우 설정
+    std::vector<float> window(config_.frame_size, 1.0f);
+    ola_aos.set_window(window.data(), config_.frame_size);
+    ola_soa.set_window(window.data(), config_.frame_size);
+
+    // 입력 데이터 생성
+    std::vector<float> ch0_frame(config_.frame_size, 0.5f);
+    std::vector<float> ch1_frame(config_.frame_size, 0.3f);
+    const float* ch_frames[2] = {ch0_frame.data(), ch1_frame.data()};
+
+    // AoS 입력 생성
+    std::vector<float> aos_input(config_.frame_size * config_.channels);
+    for (size_t i = 0; i < config_.frame_size; ++i) {
+        aos_input[i * 2 + 0] = ch0_frame[i];
+        aos_input[i * 2 + 1] = ch1_frame[i];
+    }
+
+    // 출력 버퍼 준비
+    std::vector<float> aos_ch0_out(config_.frame_size);
+    std::vector<float> aos_ch1_out(config_.frame_size);
+    float* aos_ch_out[2] = {aos_ch0_out.data(), aos_ch1_out.data()};
+
+    std::vector<float> soa_ch0_out(config_.frame_size);
+    std::vector<float> soa_ch1_out(config_.frame_size);
+    float* soa_ch_out[2] = {soa_ch0_out.data(), soa_ch1_out.data()};
+
+    // AoS와 SoA로 동일한 데이터 추가
+    ola_aos.push_frame_AoS(aos_input.data(), window.data(), 0, 0, config_.frame_size, 1.0f);
+    ola_soa.add_frame_SoA(ch_frames, window.data(), 0, 0, config_.frame_size, 1.0f);
+
+    // 출력
+    ola_aos.produce(aos_ch_out, config_.frame_size);
+    ola_soa.produce(soa_ch_out, config_.frame_size);
+
+    // 샘플-레벨 일치 검증
+    for (size_t i = 0; i < config_.frame_size; ++i) {
+        EXPECT_FLOAT_EQ(aos_ch0_out[i], soa_ch0_out[i]);
+        EXPECT_FLOAT_EQ(aos_ch1_out[i], soa_ch1_out[i]);
+    }
+}

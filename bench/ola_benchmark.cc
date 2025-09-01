@@ -3,6 +3,7 @@
 #include "dsp/window/WindowLUT.h"
 #include <vector>
 #include <random>
+#include <chrono>
 
 using namespace dsp;
 
@@ -145,6 +146,69 @@ BENCHMARK_DEFINE_F(OLABenchmarkFixture, Multichannel)(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations());
 }
 
+// push_frame_AoS 성능 테스트
+BENCHMARK_DEFINE_F(OLABenchmarkFixture, AddFrameAoS)(benchmark::State& state) {
+    OLAAccumulator ola(config_);
+    ola.set_window(window_, config_.frame_size);
+
+    // AoS 입력 생성
+    std::vector<float> aos_frame(config_.frame_size * config_.channels);
+    for (size_t i = 0; i < config_.frame_size; ++i) {
+        aos_frame[i * config_.channels] = test_frame_[i];
+    }
+
+    for (auto _ : state) {
+        ola.push_frame_AoS(aos_frame.data(), window_, 0, 0, config_.frame_size, 1.0f);
+        benchmark::DoNotOptimize(ola);
+    }
+
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * config_.frame_size * sizeof(float));
+}
+
+// AoS vs SoA 성능 비교
+BENCHMARK_DEFINE_F(OLABenchmarkFixture, AoSvsSoAComparison)(benchmark::State& state) {
+    // SoA 설정
+    OLAAccumulator ola_soa(config_);
+    ola_soa.set_window(window_, config_.frame_size);
+    const float* ch_frames[1] = {test_frame_.data()};
+
+    // AoS 설정
+    OLAAccumulator ola_aos(config_);
+    ola_aos.set_window(window_, config_.frame_size);
+    std::vector<float> aos_frame(config_.frame_size * config_.channels);
+    for (size_t i = 0; i < config_.frame_size; ++i) {
+        aos_frame[i * config_.channels] = test_frame_[i];
+    }
+
+    double soa_time = 0.0;
+    double aos_time = 0.0;
+
+    for (auto _ : state) {
+        // SoA 측정
+        auto start = std::chrono::high_resolution_clock::now();
+        ola_soa.add_frame_SoA(ch_frames, window_, 0, 0, config_.frame_size, 1.0f);
+        auto end = std::chrono::high_resolution_clock::now();
+        soa_time += std::chrono::duration<double, std::micro>(end - start).count();
+
+        // AoS 측정
+        start = std::chrono::high_resolution_clock::now();
+        ola_aos.push_frame_AoS(aos_frame.data(), window_, 0, 0, config_.frame_size, 1.0f);
+        end = std::chrono::high_resolution_clock::now();
+        aos_time += std::chrono::duration<double, std::micro>(end - start).count();
+    }
+
+    // 결과 보고
+    state.counters["SoA_time_us"] = benchmark::Counter(soa_time / state.iterations(),
+                                                       benchmark::Counter::kAvgThreads);
+    state.counters["AoS_time_us"] = benchmark::Counter(aos_time / state.iterations(),
+                                                       benchmark::Counter::kAvgThreads);
+    state.counters["AoS_overhead_us"] = benchmark::Counter((aos_time - soa_time) / state.iterations(),
+                                                           benchmark::Counter::kAvgThreads);
+
+    state.SetItemsProcessed(state.iterations());
+}
+
 // 벤치마크 등록
 BENCHMARK_REGISTER_F(OLABenchmarkFixture, AddFrameSoA)
     ->Unit(benchmark::kMicrosecond)
@@ -161,5 +225,13 @@ BENCHMARK_REGISTER_F(OLABenchmarkFixture, FullPipeline)
 BENCHMARK_REGISTER_F(OLABenchmarkFixture, Multichannel)
     ->Unit(benchmark::kMicrosecond)
     ->Iterations(5000);
+
+BENCHMARK_REGISTER_F(OLABenchmarkFixture, AddFrameAoS)
+    ->Unit(benchmark::kMicrosecond)
+    ->Iterations(10000);
+
+BENCHMARK_REGISTER_F(OLABenchmarkFixture, AoSvsSoAComparison)
+    ->Unit(benchmark::kMicrosecond)
+    ->Iterations(1000);
 
 BENCHMARK_MAIN();

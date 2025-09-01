@@ -1,10 +1,12 @@
 #include "OLAAccumulator.h"
 #include "kernels.h"
 #include "norm_builder.h"
+#include "aos_to_soa.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <cstring>
+#include <vector>
 
 namespace dsp {
 
@@ -27,6 +29,10 @@ OLAAccumulator::OLAAccumulator(const OLAConfig& cfg)
 
     // 정규화 계수 버퍼 초기화
     norm_.resize(ring_len_, 0.0f);
+    initialize_normalization();  // 안전한 기본값(1.0)으로 초기화
+
+    // AoS 변환용 스크래치 버퍼 초기화 (최대 크기로 reserve)
+    scratch_.reserve(cfg_.channels * cfg_.frame_size);
 }
 
 void OLAAccumulator::set_window(const float* w, int wlen) {
@@ -72,9 +78,9 @@ void OLAAccumulator::add_frame_SoA(const float* const* ch_frames, const float* w
             throw std::invalid_argument("Channel frame pointer cannot be null");
         }
 
-        // 윈도우 사용 정책: apply_window_inside면 항상 내부 window_ 사용
-        const float* w = (cfg_.apply_window_inside ? window_.data() : window);
-        const bool use_win = cfg_.apply_window_inside && !window_.empty();
+        // 윈도우 사용 정책: apply_window_inside면 내부 window_ 사용, 아니면 외부 window 사용
+        const bool use_win = cfg_.apply_window_inside ? !window_.empty() : (window != nullptr);
+        const float* w     = use_win ? (cfg_.apply_window_inside ? window_.data() : window) : nullptr;
 
         // RingBuffer에서 해당 구간 분할
         auto [span1, span2] = ring_[c]->split(eff_start, eff_size);
@@ -106,6 +112,44 @@ void OLAAccumulator::add_frame_SoA(const float* const* ch_frames, const float* w
 
     // 생산된 샘플 수 업데이트
     produced_ = std::max(produced_, eff_start + eff_size);
+}
+
+void OLAAccumulator::push_frame_AoS(const float* interleaved, const float* window,
+                                   size_t start_sample, size_t start_off, size_t size, float gain) {
+    if (interleaved == nullptr) {
+        throw std::invalid_argument("Interleaved input pointer cannot be null");
+    }
+    if (size == 0) {
+        return;
+    }
+
+    // 경계 클램핑 (add_frame_SoA와 동일)
+    size_t eff_start = start_sample;
+    size_t eff_size = size;
+
+    if (start_off >= cfg_.frame_size) {
+        return; // 전체 프레임이 범위 밖
+    }
+
+    if (start_off + size > cfg_.frame_size) {
+        eff_size = cfg_.frame_size - start_off;
+    }
+
+    // scratch 버퍼 리사이즈 (SoA 형식)
+    scratch_.resize(cfg_.channels * eff_size);
+
+    // 디인터리브: AoS -> SoA
+    dsp::ola::deinterleave_to_scratch(interleaved + start_off * cfg_.channels,
+                                     eff_size, cfg_.channels, scratch_.data());
+
+    // 채널별 포인터 배열 생성
+    std::vector<const float*> ch_frames(cfg_.channels);
+    for (size_t c = 0; c < cfg_.channels; ++c) {
+        ch_frames[c] = scratch_.data() + c * eff_size;
+    }
+
+    // 기존 SoA 메서드 호출
+    add_frame_SoA(ch_frames.data(), window, eff_start, 0, eff_size, gain);
 }
 
 size_t OLAAccumulator::produce(float* const* ch_out, size_t n) {
@@ -192,6 +236,7 @@ void OLAAccumulator::reset() {
 
     // 윈도우 클리어 (SoA 버전에서는 윈도우를 재설정하지 않음)
     window_.clear();
+    initialize_normalization();  // 안전한 기본값(1.0)으로 복구
 }
 
 size_t OLAAccumulator::calculate_ring_size() const {

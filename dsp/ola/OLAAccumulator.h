@@ -37,12 +37,18 @@ struct OLAConfig {
  * - 다채널 지원 (SoA 레이아웃)
  * - center 모드 지원 (패딩 오프셋 보정)
  * - 수치 안정성 보장
+ * - AoS 입력 지원 (입구에서 SoA로 변환)
+ *
+ * 내부 아키텍처:
+ * - SoA(Structure of Arrays) 레이아웃으로 메모리 접근 최적화
+ * - AoS 입력은 push_frame_AoS()에서 입구 1회 변환 후 SoA 경로 사용
+ * - 모든 내부 연산은 SoA를 유지하여 캐시 효율성 극대화
  *
  * 사용 패턴:
  * 1. OLAConfig로 초기화
  * 2. set_window()로 윈도우 함수 설정
- * 3. push_frame()으로 프레임 누산
- * 4. pull()로 연속 오디오 출력
+ * 3. push_frame_SoA() 또는 push_frame_AoS()로 프레임 누산
+ * 4. produce()로 연속 오디오 출력
  * 5. flush()로 남은 데이터 배출
  */
 class OLAAccumulator {
@@ -88,6 +94,22 @@ public:
      */
     void add_frame_SoA(const float* const* ch_frames, const float* window,
                       size_t start_sample, size_t start_off, size_t size, float gain);
+
+    /**
+     * 프레임 누산 (AoS 인터페이스)
+     *
+     * 인터리브된 AoS 입력을 받아 내부적으로 SoA로 변환하여 add_frame_SoA를 호출
+     *
+     * @param interleaved 인터리브된 프레임 데이터 [size * channels]
+     *                   형식: [ch0_s0, ch1_s0, ..., ch0_s1, ch1_s1, ...]
+     * @param window 윈도우 함수 (nullptr이면 적용 안 함)
+     * @param start_sample 시작 샘플 위치
+     * @param start_off 프레임 내 시작 오프셋
+     * @param size 처리할 샘플 수
+     * @param gain 게인 계수
+     */
+    void push_frame_AoS(const float* interleaved, const float* window,
+                       size_t start_sample, size_t start_off, size_t size, float gain);
 
     /**
      * 누적 버퍼에서 연속 오디오 출력 (SoA)
@@ -149,6 +171,9 @@ private:
     std::vector<std::unique_ptr<dsp::ring::RingBuffer<float>>> ring_;  // 채널별 RingBuffer
     std::vector<float> norm_;                    // COLA 정규화 계수 [ring_len_]
     size_t ring_len_;                            // 링 버퍼 크기
+
+    // === AoS 변환용 스크래치 버퍼 ===
+    std::vector<float> scratch_;                 // 재사용 가능한 디인터리브 버퍼
 
     // === 인덱스 관리 ===
     size_t read_pos_;                            // 읽기 위치
