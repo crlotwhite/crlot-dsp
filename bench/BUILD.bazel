@@ -35,6 +35,24 @@ cc_library(
     copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],
 )
 
+cc_binary(
+    name = "kernels_benchmark",
+    srcs = ["kernels_benchmark.cc"],
+    deps = [
+        "@google_benchmark//:benchmark",
+        "//dsp:kernels",
+    ],
+    copts = [
+        "-std=c++17",
+        "-O3",
+        "-march=native",
+        "-DNDEBUG",
+        # Highway 최적화를 위한 추가 플래그
+        "-mtune=native",
+        "-ffast-math",
+    ],
+)
+
 cc_library(
     name = "micro_kernels_benchmark_lib",
     srcs = ["micro_kernels_benchmark.cc"],
@@ -42,7 +60,7 @@ cc_library(
         "@google_benchmark//:benchmark",
         "//dsp:ola_accumulator",
         "//dsp:window_lut",
-        "//dsp:kernels_scalar",
+        "//dsp:kernels",
     ],
     copts = ["-std=c++17", "-O3", "-march=native", "-DNDEBUG"],
 )

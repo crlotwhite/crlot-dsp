@@ -142,7 +142,19 @@ cc_test(
     deps = [
         "@googletest//:gtest",
         "@googletest//:gtest_main",
-        "//dsp:kernels_scalar",
+        "//dsp:kernels",  # Highway 구현 포함
+    ],
+    copts = ["-std=c++17"],
+)
+
+cc_test(
+    name = "dispatch_debug_test",
+    size = "small",
+    srcs = ["dispatch_debug_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:kernels",
     ],
     copts = ["-std=c++17"],
 )

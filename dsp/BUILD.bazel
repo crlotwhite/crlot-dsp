@@ -37,19 +37,50 @@ cc_library(
     deps = [
         "//dsp:norm_builder",
         "//dsp:ring_buffer",
-        "//dsp:kernels_scalar",
+        "//dsp:kernels",
         "//dsp:aos_to_soa",
     ],
     copts = ["-std=c++17"],
 )
 
 cc_library(
-    name = "kernels_scalar",
+    name = "kernels_hwy",
+    srcs = ["ola/kernels_hwy.cc"],
+    hdrs = ["ola/kernels.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@highway//:hwy",
+    ],
+    copts = [
+        "-std=c++17",
+        "-O3",
+        # Highway 최적화를 위한 컴파일러 플래그
+        "-march=native",
+        "-mtune=native",
+        # Highway 다중 타겟 컴파일을 위한 설정
+        "-DHWY_COMPILE_ALL_ATTAINABLE=1",
+    ],
+    local_defines = [
+        "HWY_COMPILE_ALL_ATTAINABLE=1",
+    ],
+)
+
+cc_library(
+    name = "kernels",
     srcs = ["ola/kernels.cc"],
     hdrs = ["ola/kernels.h"],
     visibility = ["//visibility:public"],
-    deps = [],
+    deps = [
+        ":kernels_hwy",
+    ],
     copts = ["-std=c++17"],
+)
+
+# 이전 버전과의 호환성을 위한 별칭
+cc_library(
+    name = "kernels_scalar",
+    visibility = ["//visibility:public"],
+    deps = [":kernels"],
 )
 
 cc_library(
