@@ -321,3 +321,218 @@ TEST_F(OLAAccumulatorTest, AoSvsSoAConsistency) {
         EXPECT_FLOAT_EQ(aos_ch1_out[i], soa_ch1_out[i]);
     }
 }
+
+// Shadow Ring 옵션 테스트
+TEST_F(OLAAccumulatorTest, ShadowRingOption) {
+    // Shadow Ring 비활성화 설정
+    OLAConfig config_normal = config_;
+    config_normal.shadow_ring = false;
+
+    // Shadow Ring 활성화 설정
+    OLAConfig config_shadow = config_;
+    config_shadow.shadow_ring = true;
+
+    OLAAccumulator ola_normal(config_normal);
+    OLAAccumulator ola_shadow(config_shadow);
+
+    // 윈도우 설정
+    std::vector<float> window(config_.frame_size, 1.0f);
+    ola_normal.set_window(window.data(), config_.frame_size);
+    ola_shadow.set_window(window.data(), config_.frame_size);
+
+    // 입력 프레임 준비
+    std::vector<float> frame(config_.frame_size, 0.5f);
+    const float* ch_frames[1] = {frame.data()};
+
+    // 출력 버퍼 준비
+    std::vector<float> output_normal(config_.frame_size);
+    std::vector<float> output_shadow(config_.frame_size);
+    float* ch_out_normal[1] = {output_normal.data()};
+    float* ch_out_shadow[1] = {output_shadow.data()};
+
+    // 동일한 프레임 추가
+    ola_normal.add_frame_SoA(ch_frames, window.data(), 0, 0, config_.frame_size, 1.0f);
+    ola_shadow.add_frame_SoA(ch_frames, window.data(), 0, 0, config_.frame_size, 1.0f);
+
+    // 출력
+    size_t produced_normal = ola_normal.produce(ch_out_normal, config_.frame_size);
+    size_t produced_shadow = ola_shadow.produce(ch_out_shadow, config_.frame_size);
+
+    // 기본 검증: 동일한 출력 결과를 생성해야 함
+    EXPECT_EQ(produced_normal, produced_shadow);
+    EXPECT_EQ(ola_normal.produced_samples(), ola_shadow.produced_samples());
+
+    // 샘플-레벨 일치 검증
+    for (size_t i = 0; i < config_.frame_size; ++i) {
+        EXPECT_FLOAT_EQ(output_normal[i], output_shadow[i]);
+    }
+}
+
+// Shadow Ring 메모리 할당 및 기본 속성 테스트
+TEST_F(OLAAccumulatorTest, ShadowRingMemoryAllocation) {
+    // 큰 프레임 크기로 테스트
+    config_.frame_size = 1024;
+    config_.hop_size = 256;
+
+    OLAConfig config_normal = config_;
+    config_normal.shadow_ring = false;
+
+    OLAConfig config_shadow = config_;
+    config_shadow.shadow_ring = true;
+
+    OLAAccumulator ola_normal(config_normal);
+    OLAAccumulator ola_shadow(config_shadow);
+
+    // RingBuffer 크기 검증
+    size_t ring_size_normal = ola_normal.ring_size();
+    size_t ring_size_shadow = ola_shadow.ring_size();
+
+    // 기본 링 크기는 동일
+    EXPECT_EQ(ring_size_normal, ring_size_shadow);
+}
+
+// Shadow Ring contiguous_read_ptr 테스트
+TEST_F(OLAAccumulatorTest, ShadowRingContiguousReadPtr) {
+    config_.channels = 1;
+    config_.frame_size = 256;
+    config_.hop_size = 64;
+    config_.shadow_ring = true;
+
+    OLAAccumulator ola(config_);
+
+    // 윈도우 설정
+    std::vector<float> window(config_.frame_size, 1.0f);
+    ola.set_window(window.data(), config_.frame_size);
+
+    // 입력 프레임 준비
+    std::vector<float> frame(config_.frame_size, 0.5f);
+    const float* ch_frames[1] = {frame.data()};
+
+    // 프레임 추가
+    ola.add_frame_SoA(ch_frames, window.data(), 0, 0, config_.frame_size, 1.0f);
+
+    // 기본적인 동작 검증
+    // Shadow Ring 모드에서는 내부적으로 contiguous_read_ptr가 사용됨
+    // 여기서는 OLA Accumulator의 정상 동작만 검증
+    EXPECT_TRUE(ola.has_window());
+    EXPECT_EQ(ola.config().shadow_ring, true);
+    EXPECT_EQ(ola.produced_samples(), config_.frame_size);
+}
+
+// Shadow Ring 직접 테스트 (RingBuffer 단위)
+TEST(RingBufferShadowTest, ShadowRingBasicProperties) {
+    const size_t capacity = 256;
+
+    // 일반 RingBuffer
+    dsp::ring::RingBuffer<float> rb_normal(capacity, false);
+    EXPECT_EQ(rb_normal.capacity(), capacity);
+    EXPECT_EQ(rb_normal.physical_capacity(), capacity);
+    EXPECT_FALSE(rb_normal.has_shadow());
+
+    // Shadow RingBuffer
+    dsp::ring::RingBuffer<float> rb_shadow(capacity, true);
+    EXPECT_EQ(rb_shadow.capacity(), capacity);
+    EXPECT_EQ(rb_shadow.physical_capacity(), capacity * 2);
+    EXPECT_TRUE(rb_shadow.has_shadow());
+}
+
+// Shadow Ring wrap 없는 쓰기 테스트
+TEST(RingBufferShadowTest, ShadowRingWriteWithoutWrap) {
+    const size_t capacity = 256;
+    dsp::ring::RingBuffer<float> rb(capacity, true);
+
+    // 초기 상태 확인
+    EXPECT_EQ(rb.write_pos(), 0);
+
+    // capacity보다 작은 데이터 쓰기 (wrap 없음)
+    std::vector<float> data(capacity / 2, 1.0f);
+    size_t written = rb.write(data.data(), data.size());
+
+    EXPECT_EQ(written, data.size());
+    EXPECT_EQ(rb.write_pos(), data.size());
+
+    // 미러 영역은 변경되지 않아야 함
+    for (size_t i = 0; i < data.size(); ++i) {
+        EXPECT_EQ(rb.data()[capacity + i], 0.0f);  // 초기값 0
+    }
+}
+
+// Shadow Ring wrap 있는 쓰기 및 미러 복사 테스트
+TEST(RingBufferShadowTest, ShadowRingWriteWithWrap) {
+    const size_t capacity = 256;
+    dsp::ring::RingBuffer<float> rb(capacity, true);
+
+    // capacity보다 큰 데이터 쓰기 (wrap 발생)
+    std::vector<float> data(capacity + capacity / 2, 2.0f);
+    size_t written = rb.write(data.data(), data.size());
+
+    EXPECT_EQ(written, data.size());
+    EXPECT_EQ(rb.write_pos(), capacity / 2);  // 헤드에 쓴 만큼
+
+    // 헤드 영역 데이터 확인
+    for (size_t i = 0; i < capacity / 2; ++i) {
+        EXPECT_EQ(rb.data()[i], 2.0f);
+    }
+
+    // 미러 영역에 복사되었는지 확인
+    for (size_t i = 0; i < capacity / 2; ++i) {
+        EXPECT_EQ(rb.data()[capacity + i], 2.0f);
+    }
+}
+
+// Shadow Ring 정확히 capacity만큼 쓰기 테스트
+TEST(RingBufferShadowTest, ShadowRingWriteExactCapacity) {
+    const size_t capacity = 256;
+    dsp::ring::RingBuffer<float> rb(capacity, true);
+
+    // 정확히 capacity만큼 쓰기
+    std::vector<float> data(capacity, 3.0f);
+    size_t written = rb.write(data.data(), data.size());
+
+    EXPECT_EQ(written, data.size());
+    EXPECT_EQ(rb.write_pos(), 0);  // wrap 발생하지 않음
+
+    // 미러 영역은 변경되지 않아야 함
+    for (size_t i = 0; i < capacity; ++i) {
+        EXPECT_EQ(rb.data()[capacity + i], 0.0f);  // 초기값 0
+    }
+}
+
+// Shadow Ring 연속 뷰 제공 테스트
+TEST(RingBufferShadowTest, ShadowRingContiguousView) {
+    const size_t capacity = 256;
+    dsp::ring::RingBuffer<float> rb(capacity, true);
+
+    // 일부 데이터 쓰기
+    std::vector<float> data(capacity / 4, 4.0f);
+    rb.write(data.data(), data.size());
+
+    // contiguous_read_ptr 테스트
+    const float* ptr = rb.contiguous_read_ptr(0);
+    EXPECT_EQ(ptr, rb.data());
+
+    // Shadow 모드에서는 wrap 경계를 넘어도 연속 메모리
+    const float* ptr2 = rb.contiguous_read_ptr(capacity / 2);
+    EXPECT_EQ(ptr2, rb.data() + capacity / 2);
+}
+
+// Shadow Ring split 유틸 호환성 테스트
+TEST(RingBufferShadowTest, ShadowRingSplitCompatibility) {
+    const size_t capacity = 256;
+    dsp::ring::RingBuffer<float> rb(capacity, true);
+
+    // 데이터 쓰기
+    std::vector<float> data(capacity / 2, 5.0f);
+    rb.write(data.data(), data.size());
+
+    // split 유틸 테스트
+    auto [span1, span2] = rb.split(0, capacity / 4);
+
+    EXPECT_FALSE(span1.empty());
+    EXPECT_TRUE(span2.empty());  // wrap 없으므로 두 번째 스팬은 비어있음
+
+    // 데이터 일치 확인
+    for (size_t i = 0; i < span1.size(); ++i) {
+        EXPECT_EQ(span1[i], 5.0f);
+    }
+}

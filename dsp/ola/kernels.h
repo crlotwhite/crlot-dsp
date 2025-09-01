@@ -5,6 +5,13 @@
 namespace dsp {
 
 /**
+ * 최대 프레임 크기 상수 (Shadow Ring 구현용)
+ * 일반적인 오디오 처리에서 사용되는 최대 프레임 크기를 정의합니다.
+ */
+constexpr size_t kMaxFrameSize = 16384;
+
+
+/**
  * 커널 함수들 - Highway SIMD 최적화 포함
  * 런타임에 CPU가 지원하는 최적의 SIMD 구현을 자동 선택합니다.
  */

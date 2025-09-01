@@ -22,9 +22,9 @@ OLAAccumulator::OLAAccumulator(const OLAConfig& cfg)
     // 링 버퍼 크기 계산
     ring_len_ = calculate_ring_size();
 
-    // 채널별 RingBuffer 초기화
+    // 채널별 RingBuffer 초기화 (Shadow Ring 옵션 적용)
     for (size_t c = 0; c < cfg_.channels; ++c) {
-        ring_.emplace_back(std::make_unique<dsp::ring::RingBuffer<float>>(ring_len_, false));
+        ring_.emplace_back(std::make_unique<dsp::ring::RingBuffer<float>>(ring_len_, cfg_.shadow_ring));
     }
 
     // 정규화 계수 버퍼 초기화
@@ -112,6 +112,13 @@ void OLAAccumulator::add_frame_SoA(const float* const* ch_frames, const float* w
 
     // 생산된 샘플 수 업데이트
     produced_ = std::max(produced_, eff_start + eff_size);
+
+    // Shadow Ring 모드일 경우 섀도우 영역 동기화
+    if (cfg_.shadow_ring) {
+        for (size_t c = 0; c < cfg_.channels; ++c) {
+            ring_[c]->shadow_sync(eff_size);
+        }
+    }
 }
 
 void OLAAccumulator::push_frame_AoS(const float* interleaved, const float* window,

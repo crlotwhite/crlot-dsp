@@ -38,13 +38,23 @@ class RingBuffer {
 
   /**
    * Returns the capacity of the buffer.
-   */
-  size_t capacity() const noexcept { return capacity_; }
+    */
+   size_t capacity() const noexcept { return capacity_; }
 
-  /**
-   * Returns the current write position (for future use).
-   */
-  size_t write_pos() const noexcept { return write_pos_; }
+   /**
+    * Returns the physical capacity of the buffer (including shadow area).
+    */
+   size_t physical_capacity() const noexcept { return shadow_ ? (capacity_ * 2) : capacity_; }
+
+   /**
+    * Returns whether this is a shadow buffer.
+    */
+   bool has_shadow() const noexcept { return shadow_; }
+
+   /**
+    * Returns the current write position (for future use).
+    */
+   size_t write_pos() const noexcept { return write_pos_; }
 
   /**
    * Splits a contiguous range starting from 'start' with length 'len' into
@@ -62,18 +72,34 @@ class RingBuffer {
   [[nodiscard]] std::pair<base::Span<const T>, base::Span<const T>> split(size_t start, size_t len) const noexcept;
 
   /**
-   * Shadow synchronization method (to be implemented in PR 7).
-   * This will synchronize frame_size bytes after frame accumulation.
-   *
-   * @param bytes Number of bytes to synchronize
-   */
-  void shadow_sync(size_t bytes);
+   * Shadow synchronization method.
+    * Synchronizes the head region (0..bytes-1) to the mirror area after wrap.
+    *
+    * @param bytes Number of elements to synchronize (not bytes)
+    */
+   void shadow_sync(size_t bytes);
+
+   /**
+    * Returns a contiguous read pointer for the given position.
+    * In shadow mode, this guarantees contiguous memory even across wrap boundaries.
+    *
+    * @param read_pos The read position
+    * @return Contiguous pointer to read from
+    */
+   T* contiguous_read_ptr(size_t read_pos) noexcept;
+   const T* contiguous_read_ptr(size_t read_pos) const noexcept;
 
   /**
    * Direct access to the underlying buffer (for internal use).
    */
   T* data() noexcept { return buffer_; }
   const T* data() const noexcept { return buffer_; }
+
+  /**
+   * Simple write method for testing (writes n elements from src to current write position).
+   * Returns the number of elements actually written.
+   */
+  size_t write(const T* src, size_t n);
 
  private:
   T* buffer_;           // 64-byte aligned buffer

@@ -19,6 +19,7 @@ struct OLAConfig {
     size_t channels;                    // 채널 수
     float eps = 1e-8f;                  // 정규화 eps
     bool apply_window_inside;           // 내부 윈도우 적용 여부
+    bool shadow_ring = false;           // Shadow Ring 옵션 활성화
 
     // 검증 함수
     bool isValid() const {
