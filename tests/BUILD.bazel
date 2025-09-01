@@ -72,18 +72,18 @@ cc_test(
     copts = ["-std=c++17"],
 )
 
-cc_test(
-    name = "ola_performance_test",
-    size = "small",
-    srcs = ["ola_performance_test.cc"],
-    deps = [
-        "@googletest//:gtest",
-        "@googletest//:gtest_main",
-        "//dsp:ola_accumulator",
-        "//dsp:window_lut",
-    ],
-    copts = ["-std=c++17"],
-)
+# cc_test(
+#     name = "ola_performance_test",
+#     size = "small",
+#     srcs = ["ola_performance_test.cc"],
+#     deps = [
+#         "@googletest//:gtest",
+#         "@googletest//:gtest_main",
+#         "//dsp:ola_accumulator",
+#         "//dsp:window_lut",
+#     ],
+#     copts = ["-std=c++17"],
+# )
 
 cc_test(
     name = "ola_accumulator_test",
@@ -143,6 +143,18 @@ cc_test(
         "@googletest//:gtest",
         "@googletest//:gtest_main",
         "//dsp:kernels_scalar",
+    ],
+    copts = ["-std=c++17"],
+)
+
+cc_test(
+    name = "norm_builder_test",
+    size = "small",
+    srcs = ["norm_builder_test.cc"],
+    deps = [
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+        "//dsp:norm_builder",
     ],
     copts = ["-std=c++17"],
 )

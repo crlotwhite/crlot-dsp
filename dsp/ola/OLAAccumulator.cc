@@ -1,4 +1,5 @@
 #include "OLAAccumulator.h"
+#include "norm_builder.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -175,41 +176,10 @@ void OLAAccumulator::initialize_normalization() {
         return;
     }
 
-    // 정규화 버퍼 초기화
-    std::fill(norm_buffer_.begin(), norm_buffer_.end(), 0.0f);
-
-    // 개선된 COLA 정규화: 링 버퍼 크기에 맞춰 직접 계산
-    // 각 링 버퍼 위치에서 중첩되는 윈도우들의 합을 계산
-
-    for (size_t ring_pos = 0; ring_pos < ring_len_; ++ring_pos) {
-        float overlap_sum = 0.0f;
-
-        // 이 링 위치에 영향을 주는 모든 프레임을 고려
-        // 프레임 k가 링 위치 ring_pos에 기여하는 조건:
-        // ring_pos = (k * hop_size + t) % ring_len_, 여기서 0 <= t < frame_size
-
-        for (int frame_offset = -10; frame_offset <= 10; ++frame_offset) {
-            int64_t frame_start = frame_offset * cfg_.hop_size;
-
-            for (int t = 0; t < cfg_.frame_size; ++t) {
-                int64_t sample_pos = frame_start + t;
-                size_t mapped_pos = static_cast<size_t>(sample_pos % static_cast<int64_t>(ring_len_));
-
-                // 음수 모듈로 처리
-                if (sample_pos < 0) {
-                    mapped_pos = ring_len_ - (static_cast<size_t>(-sample_pos) % ring_len_);
-                    if (mapped_pos == ring_len_) mapped_pos = 0;
-                }
-
-                if (mapped_pos == ring_pos) {
-                    overlap_sum += window_[t];
-                }
-            }
-        }
-
-        // 정규화 계수 설정 (최소값 보장)
-        norm_buffer_[ring_pos] = std::max(overlap_sum, 1e-8f);
-    }
+    // 최적화된 선형 누적 COLA 정규화 계산
+    dsp::ola::build_norm_linear(norm_buffer_.data(), window_.data(),
+                               ring_len_, static_cast<size_t>(cfg_.frame_size),
+                               static_cast<size_t>(cfg_.hop_size));
 }
 
 void OLAAccumulator::add_frame_mono(int64_t start_sample, const float* frame) {

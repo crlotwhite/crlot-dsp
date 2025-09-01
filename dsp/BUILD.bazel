@@ -34,7 +34,9 @@ cc_library(
     srcs = ["ola/OLAAccumulator.cc"],
     hdrs = ["ola/OLAAccumulator.h"],
     visibility = ["//visibility:public"],
-    deps = [],
+    deps = [
+        "//dsp:norm_builder",
+    ],
     copts = ["-std=c++17"],
 )
 
@@ -44,6 +46,17 @@ cc_library(
     hdrs = ["ola/kernels.h"],
     visibility = ["//visibility:public"],
     deps = [],
+    copts = ["-std=c++17"],
+)
+
+cc_library(
+    name = "norm_builder",
+    srcs = ["ola/norm_builder.cc"],
+    hdrs = ["ola/norm_builder.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//dsp:ring_buffer",
+    ],
     copts = ["-std=c++17"],
 )
 
