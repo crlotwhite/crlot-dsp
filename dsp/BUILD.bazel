@@ -36,6 +36,8 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "//dsp:norm_builder",
+        "//dsp:ring_buffer",
+        "//dsp:kernels_scalar",
     ],
     copts = ["-std=c++17"],
 )

@@ -15,9 +15,8 @@ public:
         config_.frame_size = 1024;
         config_.hop_size = 256;
         config_.channels = 1;
-        config_.center = false;
+        config_.eps = 1e-8f;
         config_.apply_window_inside = false;
-        config_.gain = 1.0f;
 
         // 윈도우 설정
         WindowLUT& lut = WindowLUT::getInstance();
@@ -43,15 +42,15 @@ protected:
     std::vector<float> output_buffer_;
 };
 
-// push_frame 성능 테스트
-BENCHMARK_DEFINE_F(OLABenchmarkFixture, PushFrame)(benchmark::State& state) {
+// add_frame_SoA 성능 테스트
+BENCHMARK_DEFINE_F(OLABenchmarkFixture, AddFrameSoA)(benchmark::State& state) {
     OLAAccumulator ola(config_);
     ola.set_window(window_, config_.frame_size);
 
-    int64_t frame_index = 0;
+    const float* ch_frames[1] = {test_frame_.data()};
 
     for (auto _ : state) {
-        ola.push_frame(frame_index++, test_frame_.data());
+        ola.add_frame_SoA(ch_frames, window_, 0, 0, config_.frame_size, 1.0f);
         benchmark::DoNotOptimize(ola);
     }
 
@@ -60,24 +59,27 @@ BENCHMARK_DEFINE_F(OLABenchmarkFixture, PushFrame)(benchmark::State& state) {
     state.SetBytesProcessed(state.iterations() * config_.frame_size * sizeof(float));
 }
 
-// pull 성능 테스트
-BENCHMARK_DEFINE_F(OLABenchmarkFixture, Pull)(benchmark::State& state) {
+// produce 성능 테스트
+BENCHMARK_DEFINE_F(OLABenchmarkFixture, Produce)(benchmark::State& state) {
     OLAAccumulator ola(config_);
     ola.set_window(window_, config_.frame_size);
 
     // 충분한 데이터 미리 생성
+    const float* ch_frames[1] = {test_frame_.data()};
     for (int i = 0; i < 10; ++i) {
-        ola.push_frame(i, test_frame_.data());
+        ola.add_frame_SoA(ch_frames, window_, i * config_.hop_size, 0, config_.frame_size, 1.0f);
     }
 
+    float* ch_out[1] = {output_buffer_.data()};
+
     for (auto _ : state) {
-        int samples = ola.pull(output_buffer_.data(), config_.hop_size);
+        size_t samples = ola.produce(ch_out, config_.hop_size);
         benchmark::DoNotOptimize(samples);
 
         // 데이터 보충
         if (samples > 0) {
             static int frame_counter = 10;
-            ola.push_frame(frame_counter++, test_frame_.data());
+            ola.add_frame_SoA(ch_frames, window_, frame_counter++ * config_.hop_size, 0, config_.frame_size, 1.0f);
         }
     }
 
@@ -92,16 +94,17 @@ BENCHMARK_DEFINE_F(OLABenchmarkFixture, FullPipeline)(benchmark::State& state) {
         ola.set_window(window_, config_.frame_size);
 
         // 여러 프레임 처리
+        const float* ch_frames[1] = {test_frame_.data()};
         for (int i = 0; i < 5; ++i) {
-            ola.push_frame(i, test_frame_.data());
+            ola.add_frame_SoA(ch_frames, window_, i * config_.hop_size, 0, config_.frame_size, 1.0f);
         }
 
         // 출력
         std::vector<float> output(config_.hop_size * 5);
-        int total_samples = 0;
-        while (total_samples < static_cast<int>(output.size())) {
-            int samples = ola.pull(output.data() + total_samples,
-                                  output.size() - total_samples);
+        float* ch_out[1] = {output.data()};
+        size_t total_samples = 0;
+        while (total_samples < output.size()) {
+            size_t samples = ola.produce(ch_out, output.size() - total_samples);
             if (samples == 0) break;
             total_samples += samples;
         }
@@ -115,22 +118,27 @@ BENCHMARK_DEFINE_F(OLABenchmarkFixture, FullPipeline)(benchmark::State& state) {
 // 다채널 성능 테스트
 BENCHMARK_DEFINE_F(OLABenchmarkFixture, Multichannel)(benchmark::State& state) {
     config_.channels = 2;
-    std::vector<float> stereo_frame(config_.frame_size * 2);
+    std::vector<float> ch0_frame(config_.frame_size);
+    std::vector<float> ch1_frame(config_.frame_size);
 
     // 스테레오 테스트 데이터
     for (int i = 0; i < config_.frame_size; ++i) {
-        stereo_frame[i * 2] = test_frame_[i];      // L
-        stereo_frame[i * 2 + 1] = test_frame_[i];  // R
+        ch0_frame[i] = test_frame_[i];  // L
+        ch1_frame[i] = test_frame_[i];  // R
     }
+
+    const float* ch_frames[2] = {ch0_frame.data(), ch1_frame.data()};
 
     OLAAccumulator ola(config_);
     ola.set_window(window_, config_.frame_size);
 
-    std::vector<float> stereo_output(config_.hop_size * 2);
+    std::vector<float> ch0_out(config_.hop_size);
+    std::vector<float> ch1_out(config_.hop_size);
+    float* ch_out[2] = {ch0_out.data(), ch1_out.data()};
 
     for (auto _ : state) {
-        ola.push_frame(0, stereo_frame.data());
-        int samples = ola.pull(stereo_output.data(), config_.hop_size);
+        ola.add_frame_SoA(ch_frames, window_, 0, 0, config_.frame_size, 1.0f);
+        size_t samples = ola.produce(ch_out, config_.hop_size);
         benchmark::DoNotOptimize(samples);
     }
 
@@ -138,11 +146,11 @@ BENCHMARK_DEFINE_F(OLABenchmarkFixture, Multichannel)(benchmark::State& state) {
 }
 
 // 벤치마크 등록
-BENCHMARK_REGISTER_F(OLABenchmarkFixture, PushFrame)
+BENCHMARK_REGISTER_F(OLABenchmarkFixture, AddFrameSoA)
     ->Unit(benchmark::kMicrosecond)
     ->Iterations(10000);
 
-BENCHMARK_REGISTER_F(OLABenchmarkFixture, Pull)
+BENCHMARK_REGISTER_F(OLABenchmarkFixture, Produce)
     ->Unit(benchmark::kMicrosecond)
     ->Iterations(10000);
 

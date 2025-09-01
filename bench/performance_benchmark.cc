@@ -52,7 +52,7 @@ BENCHMARK_DEFINE_F(PerformanceBenchmarkFixture, OLAAccumulatorPerformance)(bench
     config.frame_size = frame_size;
     config.hop_size = hop_size;
     config.channels = channels;
-    config.center = true;
+    config.eps = 1e-8f;
     config.apply_window_inside = true;
 
     OLAAccumulator ola(config);
@@ -62,21 +62,23 @@ BENCHMARK_DEFINE_F(PerformanceBenchmarkFixture, OLAAccumulatorPerformance)(bench
     auto window = lut.GetWindowSafe(WindowType::HANN, frame_size);
     ola.set_window(window.get(), frame_size);
 
-    // 테스트 프레임 준비
-    std::vector<float> test_frame(frame_size * channels);
-    for (int i = 0; i < frame_size * channels; ++i) {
+    // 테스트 프레임 준비 (SoA)
+    std::vector<float> test_frame(frame_size);
+    for (int i = 0; i < frame_size; ++i) {
         test_frame[i] = test_data_1k_[i % test_data_1k_.size()];
     }
 
-    std::vector<float> output(hop_size * channels);
+    const float* ch_frames[1] = {test_frame.data()};
+    std::vector<float> output(hop_size);
+    float* ch_out[1] = {output.data()};
 
     for (auto _ : state) {
-        // push_frame
-        ola.push_frame(0, test_frame.data());
+        // add_frame_SoA
+        ola.add_frame_SoA(ch_frames, window.get(), 0, 0, frame_size, 1.0f);
         benchmark::DoNotOptimize(ola);
 
-        // pull
-        int samples = ola.pull(output.data(), hop_size);
+        // produce
+        size_t samples = ola.produce(ch_out, hop_size);
         benchmark::DoNotOptimize(samples);
     }
 
@@ -188,7 +190,7 @@ BENCHMARK_DEFINE_F(PerformanceBenchmarkFixture, IntegratedPipelinePerformance)(b
         config.frame_size = frame_size;
         config.hop_size = hop_size;
         config.channels = 1;
-        config.center = true;
+        config.eps = 1e-8f;
         config.apply_window_inside = true;
 
         OLAAccumulator ola(config);
@@ -221,15 +223,17 @@ BENCHMARK_DEFINE_F(PerformanceBenchmarkFixture, IntegratedPipelinePerformance)(b
             // IFFT 합성 (in-place)
             fft_plan->inverse(spectrum.data(), processed_frame.data());
 
-            // OLA 누적
-            ola.push_frame(i, processed_frame.data());
+            // OLA 누적 (SoA)
+            const float* ch_frames[1] = {processed_frame.data()};
+            ola.add_frame_SoA(ch_frames, window.get(), i * hop_size, 0, frame_size, 1.0f);
         }
 
         // 6. 출력 생성
         std::vector<float> output(input_length);
-        int total_output = 0;
-        while (total_output < static_cast<int>(input_length)) {
-            int samples = ola.pull(output.data() + total_output, hop_size);
+        float* ch_out[1] = {output.data()};
+        size_t total_output = 0;
+        while (total_output < input_length) {
+            size_t samples = ola.produce(ch_out, hop_size);
             if (samples == 0) break;
             total_output += samples;
         }

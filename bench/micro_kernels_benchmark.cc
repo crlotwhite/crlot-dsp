@@ -45,9 +45,8 @@ public:
         config.frame_size = frame_size_;
         config.hop_size = hop_size_;
         config.channels = 1;
-        config.center = false;
+        config.eps = 1e-8f;
         config.apply_window_inside = true;
-        config.gain = 1.0f;
 
         ola_ = std::make_unique<OLAAccumulator>(config);
         ola_->set_window(window_, frame_size_);
@@ -78,12 +77,14 @@ BENCHMARK_DEFINE_F(KernelMicroBenchmark, WindowMultiply)(benchmark::State& state
     state.SetBytesProcessed(state.iterations() * frame_size_ * sizeof(float));
 }
 
-// OLA 누적 커널 벤치마크 (push_frame)
+// OLA 누적 커널 벤치마크 (add_frame_SoA)
 BENCHMARK_DEFINE_F(KernelMicroBenchmark, OLAAccumulatePush)(benchmark::State& state) {
-    int64_t frame_index = 0;
+    size_t frame_index = 0;
+    const float* ch_frames[1] = {test_frames_.data()};
 
     for (auto _ : state) {
-        ola_->push_frame(frame_index++, test_frames_.data());
+        ola_->add_frame_SoA(ch_frames, window_, frame_index * hop_size_, 0, frame_size_, 1.0f);
+        frame_index++;
         benchmark::DoNotOptimize(ola_.get());
     }
 
@@ -91,23 +92,26 @@ BENCHMARK_DEFINE_F(KernelMicroBenchmark, OLAAccumulatePush)(benchmark::State& st
     state.SetBytesProcessed(state.iterations() * frame_size_ * sizeof(float));
 }
 
-// OLA 누적 커널 벤치마크 (pull)
+// OLA 누적 커널 벤치마크 (produce)
 BENCHMARK_DEFINE_F(KernelMicroBenchmark, OLAAccumulatePull)(benchmark::State& state) {
-    // 충분한 데이터 미리 푸시
+    // 충분한 데이터 미리 추가
+    const float* ch_frames[1] = {test_frames_.data()};
     for (int i = 0; i < 10; ++i) {
-        ola_->push_frame(i, test_frames_.data());
+        ola_->add_frame_SoA(ch_frames, window_, i * hop_size_, 0, frame_size_, 1.0f);
     }
 
     std::vector<float> output(hop_size_);
+    float* ch_out[1] = {output.data()};
 
     for (auto _ : state) {
-        int samples = ola_->pull(output.data(), hop_size_);
+        size_t samples = ola_->produce(ch_out, hop_size_);
         benchmark::DoNotOptimize(samples);
 
         // 데이터 보충
         if (samples > 0) {
             static int frame_counter = 10;
-            ola_->push_frame(frame_counter++, test_frames_.data());
+            ola_->add_frame_SoA(ch_frames, window_, frame_counter * hop_size_, 0, frame_size_, 1.0f);
+            frame_counter++;
         }
     }
 
@@ -119,7 +123,9 @@ BENCHMARK_DEFINE_F(KernelMicroBenchmark, OLAAccumulatePull)(benchmark::State& st
 BENCHMARK_DEFINE_F(KernelMicroBenchmark, WindowOLAKernel)(benchmark::State& state) {
     std::vector<float> frame(frame_size_);
     std::vector<float> output(hop_size_);
-    int64_t frame_index = 0;
+    size_t frame_index = 0;
+    const float* ch_frames[1] = {frame.data()};
+    float* ch_out[1] = {output.data()};
 
     for (auto _ : state) {
         // 윈도우 적용
@@ -127,10 +133,11 @@ BENCHMARK_DEFINE_F(KernelMicroBenchmark, WindowOLAKernel)(benchmark::State& stat
             frame[i] = test_frames_[i] * window_[i];
         }
 
-        // OLA 누적
-        ola_->push_frame(frame_index++, frame.data());
-        int samples = ola_->pull(output.data(), hop_size_);
+        // OLA 누적 (SoA)
+        ola_->add_frame_SoA(ch_frames, window_, frame_index * hop_size_, 0, frame_size_, 1.0f);
+        size_t samples = ola_->produce(ch_out, hop_size_);
         benchmark::DoNotOptimize(samples);
+        frame_index++;
     }
 
     state.SetItemsProcessed(state.iterations() * frame_size_);

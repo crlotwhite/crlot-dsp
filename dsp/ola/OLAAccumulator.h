@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include "dsp/ring/ring_buffer.h"
+#include <memory>
 
 namespace dsp {
 
@@ -12,17 +14,16 @@ namespace dsp {
  */
 struct OLAConfig {
     int sample_rate;                    // 샘플링 레이트
-    int frame_size;                     // N (프레임 크기)
-    int hop_size;                       // H (홉 크기)
-    int channels = 1;                   // 채널 수
-    bool center = false;                // center 모드 (패딩 오프셋 보정)
-    bool apply_window_inside = false;   // 내부 윈도우 적용 여부
-    float gain = 1.0f;                  // 전역 게인
+    size_t frame_size;                  // N (프레임 크기)
+    size_t hop_size;                    // H (홉 크기)
+    size_t channels;                    // 채널 수
+    float eps = 1e-8f;                  // 정규화 eps
+    bool apply_window_inside;           // 내부 윈도우 적용 여부
 
     // 검증 함수
     bool isValid() const {
         return sample_rate > 0 && frame_size > 0 && hop_size > 0 &&
-               channels > 0 && gain > 0.0f;
+                channels > 0 && eps > 0.0f;
     }
 };
 
@@ -74,30 +75,28 @@ public:
      */
     void set_window(const float* w, int wlen);
 
-    /**
-     * 전역 게인 설정
-     *
-     * @param g 게인 값 (> 0)
-     */
-    void set_gain(float g);
 
     /**
-     * 프레임 누산
+     * 프레임 누산 (SoA)
      *
-     * @param frame_index 프레임 인덱스 (타임라인 위치 결정)
-     * @param frame 프레임 데이터 [frame_size * channels]
-     * @throws std::invalid_argument 잘못된 프레임 데이터
+     * @param ch_frames 채널별 프레임 데이터 [channels][frame_size]
+     * @param window 윈도우 함수 (nullptr이면 적용 안 함)
+     * @param start_sample 시작 샘플 위치
+     * @param start_off 프레임 내 시작 오프셋
+     * @param size 처리할 샘플 수
+     * @param gain 게인 계수
      */
-    void push_frame(int64_t frame_index, const float* frame);
+    void add_frame_SoA(const float* const* ch_frames, const float* window,
+                      size_t start_sample, size_t start_off, size_t size, float gain);
 
     /**
-     * 누적 버퍼에서 연속 오디오 출력
+     * 누적 버퍼에서 연속 오디오 출력 (SoA)
      *
-     * @param dst 출력 버퍼 [num_samples * channels]
-     * @param num_samples 요청 샘플 수
+     * @param ch_out 채널별 출력 버퍼 [channels][num_samples]
+     * @param n 요청 샘플 수
      * @return 실제 제공한 샘플 수
      */
-    int pull(float* dst, int num_samples);
+    size_t produce(float* const* ch_out, size_t n);
 
     /**
      * 남은 꼬리까지 모두 출력
@@ -114,12 +113,12 @@ public:
     /**
      * 생산된 총 샘플 수
      */
-    int64_t produced_samples() const { return produced_samples_; }
+    size_t produced_samples() const { return produced_; }
 
     /**
-     * 소비된 총 샘플 수
+     * 읽기 위치
      */
-    int64_t consumed_samples() const { return consumed_samples_; }
+    size_t read_pos() const { return read_pos_; }
 
     /**
      * 피크 레벨 미터
@@ -145,18 +144,15 @@ private:
     // === 설정 ===
     OLAConfig cfg_;
     std::vector<float> window_;         // 윈도우 함수 복사본
-    float gain_;                        // 현재 게인
 
-    // === 링 버퍼 ===
-    std::vector<float> ring_accum_;     // 원형 누산 버퍼 [ring_len * channels]
-    std::vector<float> norm_buffer_;    // COLA 정규화 계수 [ring_len]
-    size_t ring_len_;                   // 링 버퍼 크기
+    // === 링 버퍼 (SoA) ===
+    std::vector<std::unique_ptr<dsp::ring::RingBuffer<float>>> ring_;  // 채널별 RingBuffer
+    std::vector<float> norm_;                    // COLA 정규화 계수 [ring_len_]
+    size_t ring_len_;                            // 링 버퍼 크기
 
     // === 인덱스 관리 ===
-    int64_t write_head_;                // 쓰기 위치 (절대 샘플 인덱스)
-    int64_t read_head_;                 // 읽기 위치 (절대 샘플 인덱스)
-    int64_t produced_samples_;          // 생산된 총 샘플 수
-    int64_t consumed_samples_;          // 소비된 총 샘플 수
+    size_t read_pos_;                            // 읽기 위치
+    size_t produced_;                            // 생산된 총 샘플 수
 
     // === 메트릭 ===
     float meter_peak_;                  // 피크 레벨
@@ -175,108 +171,23 @@ private:
     void initialize_normalization();
 
     /**
-     * 단일 채널 프레임 누산
-     */
-    void add_frame_mono(int64_t start_sample, const float* frame);
-
-    /**
-     * 다채널 프레임 누산
-     */
-    void add_frame_multi(int64_t start_sample, const float* frame);
-
-    /**
      * 링 인덱스 계산 (모듈로 연산)
      */
-    size_t ring_index(int64_t sample_idx) const {
-        return static_cast<size_t>(sample_idx % static_cast<int64_t>(ring_len_));
+    size_t ring_index(size_t sample_idx) const {
+        return sample_idx % ring_len_;
     }
 
     /**
-     * center 모드 오프셋 계산
+     * center 모드 오프셋 계산 (SoA에서는 사용하지 않음)
      */
     int64_t calculate_center_offset() const {
-        return cfg_.center ? (cfg_.frame_size / 2) : 0;
+        return 0;  // SoA 버전에서는 center 모드 지원 안 함
     }
 
     /**
      * 피크 미터 업데이트
      */
-    void update_peak_meter(const float* data, int num_samples);
-
-    /**
-     * 정규화 적용 및 버퍼 소거
-     */
-    void normalize_and_clear(float* dst, int num_samples, int64_t start_idx);
-
-    // === SIMD 최적화된 내부 함수들 ===
-
-    /**
-     * SIMD 최적화된 단일 채널 프레임 누산 (윈도우 적용)
-     */
-    void add_frame_mono_windowed_simd(int64_t effective_start, const float* frame,
-                                     int start_offset, int effective_size);
-
-    /**
-     * 스칼라 단일 채널 프레임 누산 (윈도우 적용)
-     */
-    void add_frame_mono_windowed_scalar(int64_t effective_start, const float* frame,
-                                       int start_offset, int effective_size);
-
-    /**
-     * SIMD 최적화된 단일 채널 프레임 누산 (윈도우 미적용)
-     */
-    void add_frame_mono_plain_simd(int64_t effective_start, const float* frame,
-                                  int start_offset, int effective_size);
-
-    /**
-     * 스칼라 단일 채널 프레임 누산 (윈도우 미적용)
-     */
-    void add_frame_mono_plain_scalar(int64_t effective_start, const float* frame,
-                                    int start_offset, int effective_size);
-
-    // === 다채널 SIMD 최적화된 내부 함수들 ===
-
-    /**
-     * SIMD 최적화된 다채널 프레임 누산 (윈도우 적용)
-     */
-    void add_frame_multi_windowed_simd(int64_t effective_start, const float* frame,
-                                      int start_offset, int effective_size,
-                                      int channel, size_t channel_offset);
-
-    /**
-     * 스칼라 다채널 프레임 누산 (윈도우 적용)
-     */
-    void add_frame_multi_windowed_scalar(int64_t effective_start, const float* frame,
-                                        int start_offset, int effective_size,
-                                        int channel, size_t channel_offset);
-
-    /**
-     * SIMD 최적화된 다채널 프레임 누산 (윈도우 미적용)
-     */
-    void add_frame_multi_plain_simd(int64_t effective_start, const float* frame,
-                                   int start_offset, int effective_size,
-                                   int channel, size_t channel_offset);
-
-    /**
-     * 스칼라 다채널 프레임 누산 (윈도우 미적용)
-     */
-    void add_frame_multi_plain_scalar(int64_t effective_start, const float* frame,
-                                     int start_offset, int effective_size,
-                                     int channel, size_t channel_offset);
-
-    // === 정규화 및 소거 SIMD 최적화된 내부 함수들 ===
-
-    /**
-     * SIMD 최적화된 단일 채널 정규화 및 소거
-     */
-    void normalize_and_clear_mono_simd(float* dst, int num_samples,
-                                      int64_t start_idx, float eps);
-
-    /**
-     * SIMD 최적화된 다채널 정규화 및 소거
-     */
-    void normalize_and_clear_multi_simd(float* dst, int num_samples,
-                                       int64_t start_idx, float eps);
+    void update_peak_meter(const float* data, size_t num_samples);
 };
 
 } // namespace dsp
