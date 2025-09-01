@@ -271,10 +271,20 @@ void OLAAccumulator::initialize_normalization() {
         return;
     }
 
+    // No overlap 케이스 특별 처리 (H == N)
+    if (cfg_.hop_size == cfg_.frame_size) {
+        // No overlap에서는 각 위치에 하나의 윈도우 값만 기여
+        for (size_t i = 0; i < ring_len_; ++i) {
+            size_t window_idx = i % cfg_.frame_size;
+            norm_[i] = std::max(window_[window_idx], cfg_.eps);
+        }
+        return;
+    }
+
     // 최적화된 선형 누적 COLA 정규화 계산
     dsp::ola::build_norm_linear(norm_.data(), window_.data(),
-                               ring_len_, static_cast<size_t>(cfg_.frame_size),
-                               static_cast<size_t>(cfg_.hop_size));
+                                ring_len_, static_cast<size_t>(cfg_.frame_size),
+                                static_cast<size_t>(cfg_.hop_size));
 }
 
 void OLAAccumulator::update_peak_meter(const float* data, size_t num_samples) {

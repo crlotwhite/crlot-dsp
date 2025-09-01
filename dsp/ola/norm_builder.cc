@@ -34,7 +34,7 @@ void build_norm_linear(float* norm, const float* window,
     const size_t N = frame_size, H = hop;
     const auto floor_div = [](int64_t a, size_t b){ return a < 0 ? (a - static_cast<int64_t>(b) + 1) / static_cast<int64_t>(b) : a / static_cast<int64_t>(b); };
     const int64_t K_start = floor_div(-static_cast<int64_t>(N), H);
-    const int64_t K_end = static_cast<int64_t>((ring_len - N) / H);
+    const int64_t K_end = static_cast<int64_t>((static_cast<int64_t>(ring_len) + N - 1 + H - 1) / H);
 
     for (int64_t k = K_start; k <= K_end; ++k) {
        const int64_t s = k * static_cast<int64_t>(H);
