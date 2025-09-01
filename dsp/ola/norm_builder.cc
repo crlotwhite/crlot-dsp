@@ -32,10 +32,9 @@ void build_norm_linear(float* norm, const float* window,
 
     // 전 범위를 덮도록 음수 방향도 포함 (스칼라 버전과 일치하도록)
     const size_t N = frame_size, H = hop;
-    const auto ceil_div = [](size_t a, size_t b){ return (a + b - 1) / b; };
     const auto floor_div = [](int64_t a, size_t b){ return a < 0 ? (a - static_cast<int64_t>(b) + 1) / static_cast<int64_t>(b) : a / static_cast<int64_t>(b); };
     const int64_t K_start = floor_div(-static_cast<int64_t>(N), H);
-    const int64_t K_end = static_cast<int64_t>(ceil_div(ring_len + N - 1, H));
+    const int64_t K_end = static_cast<int64_t>((ring_len - N) / H);
 
     for (int64_t k = K_start; k <= K_end; ++k) {
        const int64_t s = k * static_cast<int64_t>(H);
