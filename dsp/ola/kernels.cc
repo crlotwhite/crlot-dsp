@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>  // for std::fma
+#include <cstdio> // must be included at global scope, not inside namespace
 
 namespace dsp {
 
@@ -53,8 +54,6 @@ void normalize_and_clear(float* out, float* acc, const float* norm, float eps, s
 //==============================================================================
 // 런타임 디스패치 디버깅 함수들
 //==============================================================================
-
-#include <cstdio>
 
 const char* get_supported_targets() noexcept {
     // CPU 기능 탐지를 통한 지원 타겟 목록
